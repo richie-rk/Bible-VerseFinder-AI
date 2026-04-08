@@ -1,0 +1,16 @@
+[project]
+name = "versefinder-scripts"
+version = "0.1.0"
+description = "Index creation scripts for VerseFinder AI (dev tooling, not deployed)"
+requires-python = ">=3.13"
+dependencies = [
+    "rich>=13.0.0",
+    "openai>=1.50.0",
+    "faiss-cpu>=1.9.0",
+    "numpy>=2.0.0",
+    "bm25s>=0.2.0",
+    "PyStemmer>=2.2.0",
+]
+
+[tool.uv]
+dev-dependencies = []

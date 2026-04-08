@@ -1,0 +1,314 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* VerseFinder AI Design System - Bible.com Inspired Teal/Aqua Theme */
+
+@layer base {
+  :root {
+    /* Light Mode - Bible.com Inspired */
+    --background: 0 0% 98%;
+    --foreground: 0 0% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+
+    /* Primary Teal: #208090 */
+    --primary: 189 64% 35%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Primary variant (darker): #1a6b78 */
+    --primary-variant: 189 64% 29%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 10%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+
+    --accent: 189 64% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 189 64% 35%;
+
+    --radius: 0.5rem;
+
+    /* Header gradient */
+    --gradient-primary: linear-gradient(90deg, hsl(189 64% 35%) 0%, hsl(189 64% 29%) 100%);
+    
+    /* Highlight colors */
+    --highlight: 187 71% 94%;
+    --highlight-dark: 174 100% 15%;
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 26%;
+    --sidebar-primary: 0 0% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 0 0% 96%;
+    --sidebar-accent-foreground: 0 0% 10%;
+    --sidebar-border: 0 0% 91%;
+    --sidebar-ring: 189 64% 35%;
+  }
+
+  .dark {
+    /* Dark Mode - Desaturated, accessible */
+    --background: 0 0% 7%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 96%;
+
+    /* Light Teal for dark: #4DD0E1 */
+    --primary: 187 71% 59%;
+    --primary-foreground: 0 0% 7%;
+    
+    /* Lighter for hover: #80DEEA */
+    --primary-variant: 187 69% 71%;
+
+    --secondary: 0 0% 17%;
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 0 0% 17%;
+    --muted-foreground: 0 0% 63%;
+
+    --accent: 187 71% 59%;
+    --accent-foreground: 0 0% 7%;
+
+    --destructive: 0 63% 54%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 69% 58%;
+    --success-foreground: 0 0% 7%;
+
+    --warning: 45 93% 58%;
+    --warning-foreground: 0 0% 7%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 187 71% 59%;
+
+    /* Header gradient dark */
+    --gradient-primary: linear-gradient(90deg, hsl(187 71% 59%) 0%, hsl(187 100% 42%) 100%);
+    
+    /* Highlight colors dark */
+    --highlight: 174 100% 15%;
+
+    /* Sidebar dark */
+    --sidebar-background: 0 0% 10%;
+    --sidebar-foreground: 0 0% 96%;
+    --sidebar-primary: 224 76% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 16%;
+    --sidebar-accent-foreground: 0 0% 96%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 187 71% 59%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+
+  /* Focus visible styles for accessibility */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+  }
+
+  /* Skip to main content link */
+  .skip-link {
+    @apply absolute -top-10 left-4 z-50 bg-primary text-primary-foreground px-4 py-2 rounded-md;
+    transition: top 200ms ease;
+  }
+  
+  .skip-link:focus {
+    @apply top-4;
+  }
+}
+
+@layer components {
+  /* Search input focus glow */
+  .search-glow:focus {
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.2);
+  }
+
+  /* Pill button styles */
+  .pill-button {
+    @apply px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ease-out;
+  }
+
+  .pill-button-active {
+    @apply bg-primary text-primary-foreground;
+  }
+
+  .pill-button-inactive {
+    @apply bg-transparent text-primary border border-primary hover:bg-primary hover:text-primary-foreground;
+  }
+
+  /* Verse card styles */
+  .verse-card {
+    @apply bg-card rounded-lg p-4 border-l-4 border-l-primary shadow-sm transition-all duration-200 ease-out cursor-pointer;
+  }
+
+  .verse-card:hover {
+    @apply shadow-md;
+    transform: scale(1.01);
+  }
+
+  /* Skeleton pulse animation */
+  .skeleton-pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    animation: spin 1s linear infinite;
+  }
+
+  /* Modal animations */
+  .modal-overlay {
+    @apply fixed inset-0 bg-black/50 z-50;
+    animation: fadeIn 200ms ease-out;
+  }
+
+  .modal-content {
+    animation: slideUp 250ms ease-out;
+  }
+
+  /* Toast slide in */
+  .toast-slide {
+    animation: slideInFromTop 300ms ease-out;
+  }
+
+  /* Story link underline animation */
+  .story-link {
+    @apply relative inline-block;
+  }
+
+  .story-link::after {
+    content: '';
+    @apply absolute w-full h-0.5 bottom-0 left-0 bg-primary origin-bottom-right transition-transform duration-300;
+    transform: scaleX(0);
+  }
+
+  .story-link:hover::after {
+    @apply origin-bottom-left;
+    transform: scaleX(1);
+  }
+
+  /* Hover scale */
+  .hover-scale {
+    @apply transition-transform duration-200;
+  }
+
+  .hover-scale:hover {
+    transform: scale(1.05);
+  }
+}
+
+@layer utilities {
+  /* Reduce motion for accessibility */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Keyframes */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
