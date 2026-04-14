@@ -6,6 +6,7 @@ An intelligent Bible verse search engine powered by hybrid semantic + keyword re
 ## Table of Contents
 - [Overview](#overview)
 - [Features](#features)
+- [UI Walkthrough](#ui-walkthrough)
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -30,6 +31,88 @@ The system automatically classifies queries by type (named entity, exact phrase,
 - **Pre-built Search Indices**: FAISS and BM25 indices included — search works immediately without setup
 - **Search History**: Persists recent searches for quick access
 - **React + FastAPI Stack**: Modern, responsive frontend with a production-ready API backend
+
+## UI Walkthrough
+
+### 1. Home Page
+
+<p align="center">
+  <img src="docs/screenshots/01-home.png" alt="Home Page" width="600" />
+</p>
+
+The landing screen provides the primary entry point into VerseFinder AI.
+
+- **Hero search bar** — Type a topic, verse reference, or natural language question (e.g., "What does the Bible say about grace?") and press Enter or click Search to navigate to results.
+- **Verse of the Day** — A curated verse displayed in serif typography with a gold accent border. Click **Read Chapter** to open the full chapter in the Bible Reader with that verse highlighted.
+- **Topic pills** — Eight quick-access topic buttons (grace, forgiveness, love, fear, hope, faith, wisdom, prayer). Clicking any pill immediately runs a search for that topic.
+- **Recent searches** — Shows your last 3 search queries with timestamps. Click any card to re-run that search. History is persisted across sessions via localStorage.
+
+### 2. Search Results
+
+<p align="center">
+  <img src="docs/screenshots/02-search-results.png" alt="Search Results" width="600" />
+</p>
+
+Displays ranked Bible verses matching your query with filtering controls.
+
+- **Left sidebar (desktop)** — Contains three control groups:
+  - **Search Mode** toggle — Switch between *Semantic* (AI meaning-based), *Keyword* (exact text match), or *Hybrid* (combined scoring). Hybrid is the default.
+  - **Search Depth** — Choose *Quick* (top 10), *Balanced* (top 25), or *Comprehensive* (top 50) to control how many verses are analyzed.
+  - **Summarize with AI** button — Navigates to the AI Summary view for the current query.
+- **Results header** — Shows total verse count and the active query.
+- **Verse cards** — Each result displays the verse reference, full text, relevance score bar with percentage match, book category tag, and hover actions (bookmark, copy, share).
+- **Infinite scroll** — More results load automatically as you scroll down.
+- **Click any verse card** to open the full chapter in the Bible Reader with that verse highlighted.
+
+### 3. AI Summary
+
+<p align="center">
+  <img src="docs/screenshots/03-ai-summary.png" alt="AI Summary View" width="600" />
+</p>
+
+An AI-generated analysis that synthesizes insights from matching verses.
+
+- **AI Summary card** — The primary summary paragraph with a confidence score badge, inline clickable verse citations, and model metadata (LLM name, token count, response time).
+- **Key Insights** — Bullet-pointed takeaways extracted from the verses, each with supporting verse references.
+- **Related Themes** — Cards showing thematic connections (e.g., Salvation, Forgiveness, Faith). Each card lists connected verses as clickable pills and a brief explanation.
+- **Cited Verses** — All referenced verses with relevance badges (*Primary*, *Supporting*, or *Contextual*) and full text. Click any reference to read in context.
+- **Footer actions** — *Regenerate* re-runs the AI analysis; *Copy Summary* copies the text to clipboard.
+
+### 4. Bible Reader
+
+<p align="center">
+  <img src="docs/screenshots/04-bible-reader.png" alt="Bible Reader" width="600" />
+</p>
+
+A full-page, distraction-free reading experience (not a modal overlay).
+
+- **Compact header** — Back button, book/chapter display, and previous/next chapter arrows.
+- **Reading area** — Centered column (max 720px) with serif typography, generous line-height (1.9), gold superscript verse numbers, and warm gold highlighting on the navigated-from verse.
+- **Verse actions** — Hover over any verse to reveal a bookmark button.
+- **Font controls (bottom bar)** — Increase/decrease font size (14px–28px), verse count, and chapter navigation.
+- The reader bypasses the main navigation shell for an immersive, Kindle-like experience.
+
+### 5. Collections
+
+<p align="center">
+  <img src="docs/screenshots/05-collections.png" alt="Collections Page" width="600" />
+</p>
+
+Organize and manage your saved verses in personal collections.
+
+- **Favorites** — Default collection at the top. Verses are added by tapping the bookmark icon on any verse across the app.
+- **Custom collections** — Create named collections (e.g., "Study Notes", "Sermon Prep") using the **+ New Collection** button. Each card shows name, verse count, and a preview of saved references.
+- **Empty state** — New users see an instructional prompt with an "Explore Verses" button.
+- All collection data is persisted to localStorage via Zustand's persist middleware.
+
+### Navigation
+
+| Platform | Navigation |
+|----------|-----------|
+| Desktop | Top nav bar with logo, search, bookmarks, settings, and dark mode toggle |
+| Mobile | Bottom tab bar with Home, Search, Library, and Settings tabs |
+
+Dark mode is toggled via the sun/moon icon in the header and persists across sessions.
 
 ## Architecture
 
