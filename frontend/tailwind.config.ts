@@ -13,7 +13,12 @@ export default {
       },
     },
     extend: {
+      fontFamily: {
+        serif: ["'Noto Serif'", "'EB Garamond'", "Georgia", "serif"],
+        sans: ["'Manrope'", "'DM Sans'", "system-ui", "sans-serif"],
+      },
       colors: {
+        // Shadcn compatibility tokens (mapped to new palette)
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -22,7 +27,6 @@ export default {
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
-          variant: "hsl(var(--primary-variant))",
         },
         secondary: {
           DEFAULT: "hsl(var(--secondary))",
@@ -31,14 +35,6 @@ export default {
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
-        },
-        success: {
-          DEFAULT: "hsl(var(--success))",
-          foreground: "hsl(var(--success-foreground))",
-        },
-        warning: {
-          DEFAULT: "hsl(var(--warning))",
-          foreground: "hsl(var(--warning-foreground))",
         },
         muted: {
           DEFAULT: "hsl(var(--muted))",
@@ -56,7 +52,47 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        highlight: "hsl(var(--highlight))",
+
+        // Design System: The Modern Scriptorium
+        navy: {
+          DEFAULT: "#1a1f36",
+          deep: "#03071d",
+          light: "#dde1ff",
+          dim: "#c1c5e3",
+          muted: "#8286a2",
+        },
+        gold: {
+          DEFAULT: "#c9a94e",
+          light: "#ffe08d",
+          container: "#fdd979",
+          dim: "#e5c365",
+          dark: "#745b00",
+        },
+        cream: {
+          DEFAULT: "#faf8f0",
+          dim: "#f6f4ec",
+          mid: "#f0eee6",
+          high: "#eae8e0",
+          highest: "#e4e3db",
+        },
+        burgundy: {
+          DEFAULT: "#722f37",
+          deep: "#430a15",
+          light: "#ffdadb",
+          dim: "#ffb2b8",
+          text: "#753139",
+        },
+        surface: {
+          DEFAULT: "#fbf9f1",
+          lowest: "#ffffff",
+          low: "#f6f4ec",
+          container: "#f0eee6",
+          high: "#eae8e0",
+          highest: "#e4e3db",
+          dim: "#dcdad2",
+        },
+
+        // Sidebar (mapped to new palette)
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -72,6 +108,10 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+      },
+      boxShadow: {
+        ambient: "0 12px 40px rgba(27, 28, 23, 0.06)",
+        "ambient-lg": "0 16px 48px rgba(27, 28, 23, 0.1)",
       },
       keyframes: {
         "accordion-down": {
