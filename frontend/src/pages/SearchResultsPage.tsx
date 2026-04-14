@@ -87,10 +87,6 @@ export default function SearchResultsPage() {
     return () => { observerRef.current?.disconnect(); };
   }, [searchResults, isSearching, runSearch]);
 
-  const handleNewSearch = (newQuery: string) => {
-    navigate(`/search/${encodeURIComponent(newQuery)}`);
-  };
-
   const handleVerseClick = (book: string, chapter: number, verseId: string) => {
     const verse = verseId.split(":").pop() || "";
     navigate(`/read/${encodeURIComponent(book)}/${chapter}?highlight=${verse}`);
@@ -146,7 +142,7 @@ export default function SearchResultsPage() {
         {/* Results */}
         {searchResults && (
           <div className="space-y-4">
-            {searchResults.results.map((verse, idx) => (
+            {searchResults.results.map((verse) => (
               <VerseCard
                 key={verse.verse_id}
                 verse={verse}
