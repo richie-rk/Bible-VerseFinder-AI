@@ -480,7 +480,7 @@ wheels = [
 ]
 
 [[package]]
-name = "versefinder-scripts"
+name = "bible-verse-finder-ai-scripts"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

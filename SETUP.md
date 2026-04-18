@@ -1,4 +1,4 @@
-# VerseFinder AI - Setup & Commands
+# Bible Verse Finder AI - Setup & Commands
 
 ## Prerequisites
 

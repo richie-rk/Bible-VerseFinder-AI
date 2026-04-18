@@ -11,7 +11,7 @@ export function Header() {
     >
       <div className="flex items-center gap-2">
         <BookOpen className="h-6 w-6 text-white" aria-hidden="true" />
-        <h1 className="text-xl font-bold text-white">VerseFinder AI</h1>
+        <h1 className="text-xl font-bold text-white">Bible Verse Finder AI</h1>
       </div>
 
       <button

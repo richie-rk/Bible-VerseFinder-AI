@@ -907,7 +907,7 @@ wheels = [
 ]
 
 [[package]]
-name = "versefinder-api"
+name = "bible-verse-finder-ai"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
