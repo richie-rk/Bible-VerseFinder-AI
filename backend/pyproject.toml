@@ -1,7 +1,7 @@
 [project]
-name = "versefinder-api"
+name = "bible-verse-finder-ai"
 version = "0.1.0"
-description = "FastAPI backend for VerseFinder AI - semantic Bible verse search"
+description = "FastAPI backend for Bible Verse Finder AI - semantic Bible verse search"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

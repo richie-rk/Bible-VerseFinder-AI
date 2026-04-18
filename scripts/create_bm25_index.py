@@ -83,7 +83,7 @@ def create_bm25_index(verses: list[dict]) -> bm25s.BM25:
 
 def main():
     console.print("[bold green]" + "=" * 60)
-    console.print("[bold green]  VerseFinder AI - BM25 Index Creator")
+    console.print("[bold green]  Bible Verse Finder AI - BM25 Index Creator")
     console.print("[bold green]" + "=" * 60)
 
     # Load metadata

@@ -1,4 +1,4 @@
-# VerseFinder AI - Frontend
+# Bible Verse Finder AI - Frontend
 
 ## Tech Stack
 

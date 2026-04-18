@@ -1,4 +1,4 @@
-# VerseFinder AI
+# Bible Verse Finder AI
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An intelligent Bible verse search engine powered by hybrid semantic + keyword retrieval with AI-powered summarization, featuring adaptive query classification and multiple LLM support.
@@ -14,7 +14,7 @@ An intelligent Bible verse search engine powered by hybrid semantic + keyword re
 
 ## Overview
 
-VerseFinder AI is an advanced Bible search tool that goes beyond simple keyword matching. It allows users to search the Bible by meaning using natural language, leveraging a hybrid retrieval system that combines FAISS vector similarity search with BM25 keyword scoring through an adaptive Weighted Reciprocal Rank Fusion (RRF) algorithm.
+Bible Verse Finder AI is an advanced Bible search tool that goes beyond simple keyword matching. It allows users to search the Bible by meaning using natural language, leveraging a hybrid retrieval system that combines FAISS vector similarity search with BM25 keyword scoring through an adaptive Weighted Reciprocal Rank Fusion (RRF) algorithm.
 
 The system automatically classifies queries by type (named entity, exact phrase, concept, comparative) and dynamically adjusts ranking weights for optimal results. Search results can be summarized by an LLM that provides cited key points, thematic connections, and confidence scoring — all grounded strictly in the retrieved verses.
 
@@ -40,7 +40,7 @@ The system automatically classifies queries by type (named entity, exact phrase,
   <img src="docs/screenshots/01-home.png" alt="Home Page" width="600" />
 </p>
 
-The landing screen provides the primary entry point into VerseFinder AI.
+The landing screen provides the primary entry point into Bible Verse Finder AI.
 
 - **Hero search bar** — Type a topic, verse reference, or natural language question (e.g., "What does the Bible say about grace?") and press Enter or click Search to navigate to results.
 - **Verse of the Day** — A curated verse displayed in serif typography with a gold accent border. Click **Read Chapter** to open the full chapter in the Bible Reader with that verse highlighted.

@@ -25,7 +25,7 @@ export default function AppShell() {
           <Link to="/" className="flex items-center gap-2 text-cream hover:text-white transition-colors">
             <BookOpen className="w-5 h-5 text-gold" />
             <span className="font-serif text-lg font-medium tracking-tight">
-              VerseFinder AI
+              Bible Verse Finder AI
             </span>
           </Link>
 

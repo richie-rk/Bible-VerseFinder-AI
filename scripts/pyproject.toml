@@ -1,7 +1,7 @@
 [project]
-name = "versefinder-scripts"
+name = "bible-verse-finder-ai-scripts"
 version = "0.1.0"
-description = "Index creation scripts for VerseFinder AI (dev tooling, not deployed)"
+description = "Index creation scripts for Bible Verse Finder AI (dev tooling, not deployed)"
 requires-python = ">=3.13"
 dependencies = [
     "rich>=13.0.0",

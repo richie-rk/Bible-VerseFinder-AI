@@ -208,7 +208,7 @@ def create_index(verses: list[dict]) -> tuple[faiss.IndexFlatIP, list[dict]]:
 
 def main():
     console.print("[bold green]=" * 60)
-    console.print("[bold green]  VerseFinder AI - FAISS Index Creator")
+    console.print("[bold green]  Bible Verse Finder AI - FAISS Index Creator")
     console.print("[bold green]=" * 60)
 
     # Check API key

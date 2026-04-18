@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # API
-    app_name: str = "VerseFinder AI"
+    app_name: str = "Bible Verse Finder AI"
     app_version: str = "0.1.0"
     debug: bool = False
 
