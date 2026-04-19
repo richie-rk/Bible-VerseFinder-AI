@@ -20,6 +20,7 @@ from ..core.stopwords import BIBLICAL_STOPWORDS
 from ..models.schemas import QueryType, SearchMode, VerseResult
 from .embeddings import get_embedding
 from .query_classifier import classify_query
+from .verse_reference import parse_verse_reference, verse_ids_for
 
 
 class SearchService:
@@ -189,13 +190,30 @@ class SearchService:
 
         return rrf_results
 
+    def _lookup_by_verse_ids(self, verse_ids: list[str]) -> list[dict]:
+        """
+        Return metadata entries for the given verse_ids, preserving input order.
+        Unknown verse_ids are silently skipped (out-of-range verse numbers, etc.).
+
+        Linear scan over _metadata; Phase 4 will replace with an O(1) dict.
+        """
+        if self._metadata is None:
+            return []
+        wanted = set(verse_ids)
+        by_id: dict[str, dict] = {}
+        for verse in self._metadata:
+            vid = verse["verse_id"]
+            if vid in wanted:
+                by_id[vid] = verse
+        return [by_id[vid] for vid in verse_ids if vid in by_id]
+
     def search(
         self,
         query: str,
         mode: SearchMode = SearchMode.HYBRID,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[list[VerseResult], int, QueryType, float]:
+    ) -> tuple[list[VerseResult], int, QueryType, float | None]:
         """
         Perform search and return paginated results.
 
@@ -206,10 +224,34 @@ class SearchService:
             offset: Page offset
 
         Returns:
-            Tuple of (results, total_count, query_type, alpha)
+            Tuple of (results, total_count, query_type, alpha). Alpha is None
+            for verse-reference lookups, where no FAISS/BM25 blending applies.
         """
         if not self._loaded:
             self.load_indices()
+
+        # Verse-reference short-circuit: queries like "John 3:16" or
+        # "1 Cor 13:4-7" skip FAISS + BM25 entirely.
+        ref = parse_verse_reference(query)
+        if ref is not None:
+            verse_metas = self._lookup_by_verse_ids(verse_ids_for(ref))
+            total = len(verse_metas)
+            paginated = verse_metas[offset:offset + limit]
+            results = [
+                VerseResult(
+                    rank=offset + i + 1,
+                    verse_id=v["verse_id"],
+                    book=v["book"],
+                    text=v["text"],
+                    score=1.0,
+                    faiss_score=None,
+                    faiss_rank=None,
+                    bm25_score=None,
+                    bm25_rank=None,
+                )
+                for i, v in enumerate(paginated)
+            ]
+            return results, total, QueryType.VERSE_REFERENCE, None
 
         # Classify query and get alpha
         query_type, alpha = classify_query(query)
