@@ -22,9 +22,11 @@ export function ResultsHeader({ results }: ResultsHeaderProps) {
         <span className="inline-block px-2 py-1 bg-muted text-muted-foreground text-xs rounded">
           Query type: {results.query_type.replace(/_/g, " ")}
         </span>
-        <span className="inline-block px-2 py-1 bg-muted text-muted-foreground text-xs rounded">
-          α: {results.alpha}
-        </span>
+        {results.alpha !== null && (
+          <span className="inline-block px-2 py-1 bg-muted text-muted-foreground text-xs rounded">
+            α: {results.alpha}
+          </span>
+        )}
       </div>
     </div>
   );

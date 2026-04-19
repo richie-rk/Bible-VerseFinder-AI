@@ -127,7 +127,7 @@ async def search_verses(
         query=query,
         mode=mode,
         query_type=query_type,
-        alpha=round(alpha, 2),
+        alpha=round(alpha, 2) if alpha is not None else None,
         timing=TimingInfo(
             search_ms=round(search_ms, 2),
             total_ms=round(total_ms, 2),

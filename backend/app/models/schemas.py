@@ -20,6 +20,7 @@ class QueryType(str, Enum):
     MULTI_CONCEPT = "multi_concept"
     GENERAL_TOPIC = "general_topic"
     COMPARATIVE = "comparative"
+    VERSE_REFERENCE = "verse_reference"
     DEFAULT = "default"
 
 
@@ -66,7 +67,7 @@ class SearchResponse(BaseModel):
     query: str = Field(..., description="Original search query")
     mode: SearchMode = Field(..., description="Search mode used")
     query_type: QueryType = Field(..., description="Detected query type")
-    alpha: float = Field(..., description="Alpha weight used (semantic vs keyword)")
+    alpha: Optional[float] = Field(None, description="Alpha weight used (semantic vs keyword). Null for verse-reference lookups where no blending applies.")
     timing: TimingInfo = Field(..., description="Response timing")
     thresholds_applied: ThresholdsApplied = Field(..., description="Thresholds used")
     pagination: PaginationMeta = Field(..., description="Pagination info")

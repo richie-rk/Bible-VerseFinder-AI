@@ -12,6 +12,7 @@ export type QueryType =
   | "multi_concept"
   | "general_topic"
   | "comparative"
+  | "verse_reference"
   | "default";
 
 // Search Response Types (matches backend SearchResponse)
@@ -53,7 +54,7 @@ export interface SearchResponse {
   query: string;
   mode: SearchMode;
   query_type: QueryType;
-  alpha: number;
+  alpha: number | null;
   timing: TimingInfo;
   thresholds_applied: ThresholdsApplied;
   pagination: Pagination;
