@@ -39,3 +39,6 @@ yarn-debug.log*
 # Build artifacts
 dist-ssr/
 *.local
+
+# Local-only working directories (any folder prefixed with z_)
+z_*/

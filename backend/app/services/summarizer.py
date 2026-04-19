@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from ..core.config import settings
+from ..core.vocabularies import CANONICAL_QUERIES
 from ..models.schemas import (
     VerseResult,
     VerseInput,
@@ -34,14 +35,6 @@ logger = logging.getLogger(__name__)
 # In-memory cache for summaries (production would use Redis)
 _summary_cache: dict[str, tuple[SummarizationResponse, float]] = {}
 CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
-
-# Canonical queries that get cached
-CANONICAL_QUERIES = {
-    "grace", "faith", "love", "hope", "salvation", "forgiveness",
-    "mercy", "peace", "joy", "sin", "repentance", "redemption",
-    "baptism", "prayer", "holy spirit", "resurrection", "eternal life",
-    "kingdom of god", "kingdom of heaven", "born again", "good shepherd",
-}
 
 SUMMARIZATION_SYSTEM_PROMPT = """You are a Biblical scholar assistant. Your task is to summarize and synthesize Bible verses to answer the user's question.
 
