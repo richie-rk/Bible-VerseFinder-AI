@@ -106,27 +106,44 @@ class SearchService:
         """
         Search BM25 index for keyword matches.
 
+        Applies a dynamic threshold: keep results scoring at least
+        max(bm25_min_score, top_bm25 * bm25_relative_threshold). Absolute BM25
+        scores vary wildly with query-term rarity, so a single fixed cutoff
+        misfires — "grace" gets low-scoring matches, "propitiation" gets high-
+        scoring matches, and a one-size-fits-all threshold is wrong for one
+        of them.
+
         Returns:
-            List of (index_id, score) tuples, filtered by threshold
+            List of (index_id, score) tuples, filtered by the dynamic threshold.
         """
         if self._bm25_index is None:
             raise RuntimeError("BM25 index not loaded")
 
-        # Tokenize query
         query_tokens = self._tokenize_query(query)
 
-        # Search BM25
         indices, scores = self._bm25_index.retrieve(
             query_tokens,
             k=k,
             show_progress=False,
         )
 
-        # Filter by threshold and return
+        if indices.size == 0 or scores.size == 0:
+            return []
+
+        top_score = float(scores[0][0])
+        if top_score <= 0.0:
+            return []
+
+        threshold = max(
+            settings.bm25_min_score,
+            top_score * settings.bm25_relative_threshold,
+        )
+
         results = []
         for idx, score in zip(indices[0], scores[0]):
-            if score >= settings.bm25_threshold:
-                results.append((int(idx), float(score)))
+            s = float(score)
+            if s >= threshold:
+                results.append((int(idx), s))
 
         return results
 
@@ -139,55 +156,58 @@ class SearchService:
         """
         Compute Reciprocal Rank Fusion scores.
 
-        Formula: RRF = α × (1/(faiss_rank + k)) + (1-α) × (1/(bm25_rank + k))
+        Canonical RRF: each retriever contributes only when it actually
+        returned the document. A doc missing from one side adds 0 for that
+        side — not a tiny ghost term from pretending it was at rank 10000.
+
+            rrf = α × (1 / (faiss_rank + k))    if doc in faiss, else 0
+                + (1-α) × (1 / (bm25_rank + k)) if doc in bm25,  else 0
+
+        Scores are normalized to [0, 1] by dividing by the theoretical max
+        (1/(1+k), achieved when a doc is rank 1 in both retrievers) BEFORE
+        the rrf_threshold is applied. This lets the threshold live on a
+        0-1 scale that's easy to reason about.
 
         Returns:
-            List of (index_id, rrf_score, metadata) tuples sorted by score
+            List of (index_id, normalized_rrf_score, metadata) tuples sorted
+            by score descending, filtered by settings.rrf_threshold.
         """
-        k = settings.rrf_k  # Typically 60
+        k = settings.rrf_k
 
-        # Build rank dictionaries
         faiss_ranks = {idx: rank + 1 for rank, (idx, _) in enumerate(faiss_results)}
         faiss_scores = {idx: score for idx, score in faiss_results}
-
         bm25_ranks = {idx: rank + 1 for rank, (idx, _) in enumerate(bm25_results)}
         bm25_scores = {idx: score for idx, score in bm25_results}
 
-        # Get all unique indices
         all_indices = set(faiss_ranks.keys()) | set(bm25_ranks.keys())
 
-        # Compute RRF scores
         rrf_results = []
         for idx in all_indices:
-            # Get ranks (use large rank if not in results)
-            faiss_rank = faiss_ranks.get(idx, 10000)
-            bm25_rank = bm25_ranks.get(idx, 10000)
+            rrf_score = 0.0
+            if idx in faiss_ranks:
+                rrf_score += alpha * (1 / (faiss_ranks[idx] + k))
+            if idx in bm25_ranks:
+                rrf_score += (1 - alpha) * (1 / (bm25_ranks[idx] + k))
 
-            # Compute RRF score
-            rrf_score = alpha * (1 / (faiss_rank + k)) + (1 - alpha) * (1 / (bm25_rank + k))
-
-            # Include detailed scoring info
             score_info = {
                 "faiss_score": faiss_scores.get(idx),
                 "faiss_rank": faiss_ranks.get(idx),
                 "bm25_score": bm25_scores.get(idx),
                 "bm25_rank": bm25_ranks.get(idx),
             }
-
             rrf_results.append((idx, rrf_score, score_info))
 
-        # Sort by RRF score descending
-        rrf_results.sort(key=lambda x: x[1], reverse=True)
-
-        # Filter by RRF threshold
-        rrf_results = [(idx, score, info) for idx, score, info in rrf_results
-                       if score >= settings.rrf_threshold]
-
-        # Normalize scores to 0-1 range
-        # Theoretical max RRF score is 1/(1+k) when a result is rank 1 in both indices
         max_rrf = 1 / (1 + k)
-        rrf_results = [(idx, score / max_rrf, info) for idx, score, info in rrf_results]
+        rrf_results = [
+            (idx, score / max_rrf, info) for idx, score, info in rrf_results
+        ]
 
+        rrf_results = [
+            (idx, score, info) for idx, score, info in rrf_results
+            if score >= settings.rrf_threshold
+        ]
+
+        rrf_results.sort(key=lambda x: x[1], reverse=True)
         return rrf_results
 
     def _lookup_by_verse_ids(self, verse_ids: list[str]) -> list[dict]:
@@ -256,11 +276,11 @@ class SearchService:
         # Classify query and get alpha
         query_type, alpha = classify_query(query)
 
-        # Override alpha based on mode
-        if mode == SearchMode.SEMANTIC:
-            alpha = 1.0
-        elif mode == SearchMode.KEYWORD:
-            alpha = 0.0
+        # In non-hybrid modes there is no blending — only one retriever runs —
+        # so alpha has no meaning. Report it as None to avoid the UI showing
+        # a misleading "α: 1.0" chip for a SEMANTIC query.
+        if mode != SearchMode.HYBRID:
+            alpha = None
 
         k = settings.search_k
 
