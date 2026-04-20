@@ -6,64 +6,50 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # API
     app_name: str = "Bible Verse Finder AI"
     app_version: str = "0.1.0"
     debug: bool = False
 
-    # OpenAI
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536
 
-    # LLM Providers
-    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")  # openai | gemini | grok
+    # openai | gemini | grok
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
 
-    # OpenAI Summarization
     openai_summarization_model: str = os.getenv("OPENAI_SUMMARIZATION_MODEL", "gpt-4o-mini")
 
-    # Gemini
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_summarization_model: str = os.getenv("GEMINI_SUMMARIZATION_MODEL", "gemini-1.5-flash")
 
-    # Grok (xAI)
     grok_api_key: str = os.getenv("GROK_API_KEY", "")
     grok_summarization_model: str = os.getenv("GROK_SUMMARIZATION_MODEL", "grok-beta")
 
-    # Paths
     vector_store_path: Path = Path(__file__).parent.parent.parent / "vector_store"
 
-    # Search Parameters
-    # search_k: how many candidates each retriever returns before RRF fusion.
-    # Larger pool = more recall for hybrid (a doc at rank 60 in FAISS and rank 140
-    # in BM25 only makes it into fusion if both k's are >=140). FAISS IndexFlatIP
-    # over ~8k vectors is ~1-2ms so 200 is not a latency concern.
+    # k candidates per retriever before RRF fusion. Must exceed the typical
+    # rank gap between FAISS and BM25 for a given doc or that doc never
+    # reaches fusion.
     search_k: int = int(os.getenv("SEARCH_K", "200"))
 
-    # Thresholds (3-layer filtering)
-    faiss_threshold: float = 0.20    # Layer 1: Semantic similarity minimum (lowered from 0.35)
+    faiss_threshold: float = 0.20
 
-    # Layer 2: BM25 dynamic threshold. Absolute BM25 scores vary wildly with
-    # query-term rarity, so a single fixed cutoff is wrong for most queries.
-    # Keep results scoring >= max(bm25_min_score, top_bm25 * bm25_relative_threshold).
-    bm25_min_score: float = 0.1              # Absolute floor for noise rejection
-    bm25_relative_threshold: float = 0.05    # Fraction of top BM25 score to keep
+    # BM25 dynamic threshold: keep scores >= max(absolute floor, fraction of
+    # top). Fixed absolute cutoffs misfire because BM25 scales with term
+    # rarity — "grace" tops out ~0.8, "propitiation" tops out ~12.
+    bm25_min_score: float = 0.1
+    bm25_relative_threshold: float = 0.05
 
-    # Layer 3: RRF threshold, applied to the NORMALIZED (0-1) score.
-    # The raw RRF formula peaks at 1/(1+k) ≈ 0.0164 for k=60, so a raw cutoff like
-    # 0.003 was really ~0.18 on the normalized scale — confusing to tune. We now
-    # normalize first and threshold on a 0-1 scale users can reason about directly.
+    # Applied to the NORMALIZED (0-1) RRF score. Raw RRF peaks at 1/(1+k) ≈
+    # 0.0164 for k=60, so we normalize first to make this threshold readable.
     rrf_threshold: float = 0.15
 
-    # RRF constant (standard is 60)
     rrf_k: int = 60
 
-    # Pagination
     default_page_size: int = 50
     max_page_size: int = 100
     auto_load_until: int = 150
 
-    # Alpha values for query types
     alpha_named_entity: float = 0.38
     alpha_exact_phrase: float = 0.25
     alpha_single_concept: float = 0.65
@@ -72,18 +58,10 @@ class Settings(BaseSettings):
     alpha_comparative: float = 0.65
     alpha_default: float = 0.50
 
-    # Cache (SQLite, backend/vector_store/cache.db)
-    #
-    # Embeddings: deterministic function of (text, model). They effectively
-    # never go stale — only expire as insurance against OpenAI silently
-    # retraining the model under the same name. 90-day TTL is a safe
-    # default; set EMBEDDING_CACHE_TTL_DAYS=0 to disable TTL entirely.
-    #
-    # Summaries: LLM outputs are non-deterministic and prompts/models
-    # evolve. 7-day TTL matches the prior in-memory cache.
-    #
-    # max_entries=0 means no cap. Deployments with tight disk budgets
-    # should set a positive cap; the cache then evicts LRU on write.
+    # Embeddings are a deterministic function of (text, model) — effectively
+    # never go stale, so the TTL is long. Summaries are LLM-generated and
+    # prompts evolve, so shorter TTL. TTL=0 disables expiry; max_entries=0
+    # disables the LRU cap.
     embedding_cache_ttl_days: int = int(os.getenv("EMBEDDING_CACHE_TTL_DAYS", "90"))
     embedding_cache_max_entries: int = int(os.getenv("EMBEDDING_CACHE_MAX_ENTRIES", "0"))
     summary_cache_ttl_days: int = int(os.getenv("SUMMARY_CACHE_TTL_DAYS", "7"))

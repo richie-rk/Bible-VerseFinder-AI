@@ -1,23 +1,14 @@
 """
-Generic SQLite-backed key/bytes cache with optional TTL and optional size cap.
+SQLite-backed key/bytes cache with optional TTL and optional LRU cap.
 
-Used by:
-- embeddings.py  — caches OpenAI query embeddings (long TTL, deterministic inputs)
-- summarizer.py  — caches LLM summaries (short TTL, non-deterministic outputs)
+Backs both the embedding cache (long TTL, deterministic inputs) and the
+summary cache (short TTL, non-deterministic outputs) in a single DB file so
+ops only has one thing to back up, delete, or ship.
 
-Design notes:
-- Both caches share the same DB file (backend/vector_store/cache.db) but live
-  in different tables. Phase 4 keeps ops simple: one file to back up, delete,
-  or ship.
-- SQLite handles cross-process safety via its own locking. Cross-thread safety
-  is handled by opening a fresh connection per operation — FastAPI runs sync
-  routes on a threadpool and a single long-lived connection would need
-  check_same_thread=False plus locking anyway, so the overhead of
-  per-op connects is acceptable at the call volume we see.
-- Eviction is lazy: expired rows are deleted on read, size cap is enforced on
-  write. No background sweeper.
-- A TTL of 0 means never expire. A max_entries of 0 means no cap. This keeps
-  the common "embeddings cache" case (effectively permanent) a plain config.
+Cross-thread safety is handled by opening a fresh connection per operation;
+FastAPI dispatches sync routes onto a threadpool and a single long-lived
+connection would need check_same_thread=False + locking anyway. Per-op
+connects cost ~microseconds, well below the cache's reason for existing.
 """
 
 from __future__ import annotations
@@ -43,18 +34,14 @@ class SqliteCache:
         self._ttl_seconds = max(0, int(ttl_seconds))
         self._max_entries = max(0, int(max_entries))
 
-        # Protects the eviction-on-write path, which does a read-then-write.
-        # SQLite itself is fine with concurrent writers, but without the lock
-        # two threads can race on the "am I over cap?" check and overshoot.
+        # Serializes the read-count-then-delete eviction path so two writers
+        # don't both observe "at cap" and undershoot.
         self._write_lock = Lock()
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
-    # ---------- public API ----------
-
     def get(self, key: str) -> bytes | None:
-        """Return cached bytes for `key`, or None on miss or expiry."""
         now = time.time()
         with self._connect() as conn:
             row = conn.execute(
@@ -70,7 +57,6 @@ class SqliteCache:
                 conn.commit()
                 return None
 
-            # Update accessed_at so the LRU eviction sees this as recent.
             conn.execute(
                 f"UPDATE {self._table} SET accessed_at = ? WHERE key = ?",
                 (now, key),
@@ -79,7 +65,6 @@ class SqliteCache:
             return bytes(value)
 
     def set(self, key: str, value: bytes) -> None:
-        """Insert or replace an entry. Evicts the least-recently-used rows if over cap."""
         now = time.time()
         with self._write_lock:
             with self._connect() as conn:
@@ -118,18 +103,12 @@ class SqliteCache:
                 conn.execute(f"SELECT COUNT(*) FROM {self._table}").fetchone()[0]
             )
 
-    # ---------- internals ----------
-
     def _connect(self) -> sqlite3.Connection:
-        # check_same_thread=False lets the connection cross threads; we still
-        # open one per op so no connection is actually shared. Explicit for
-        # future-proofing if a caller holds the object briefly.
-        conn = sqlite3.connect(
+        return sqlite3.connect(
             self._db_path,
             check_same_thread=False,
             timeout=5.0,
         )
-        return conn
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

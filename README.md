@@ -16,21 +16,23 @@ An intelligent Bible verse search engine powered by hybrid semantic + keyword re
 
 Bible Verse Finder AI is an advanced Bible search tool that goes beyond simple keyword matching. It allows users to search the Bible by meaning using natural language, leveraging a hybrid retrieval system that combines FAISS vector similarity search with BM25 keyword scoring through an adaptive Weighted Reciprocal Rank Fusion (RRF) algorithm.
 
-The system automatically classifies queries by type (named entity, exact phrase, concept, comparative) and dynamically adjusts ranking weights for optimal results. Search results can be summarized by an LLM that provides cited key points, thematic connections, and confidence scoring — all grounded strictly in the retrieved verses.
+The system classifies each query via a weighted blend of feature signals (named entity, exact phrase, single/multi-concept, general topic, comparative, verse reference) and produces a continuous alpha that adjusts the FAISS-vs-BM25 balance. Exact verse references like `John 3:16` or `1 Cor 13:4-7` short-circuit retrieval entirely and return the verse directly. Search results can be summarized by an LLM that provides cited key points, thematic connections, and a confidence score — all grounded strictly in the retrieved verses.
 
 ## Features
 
-- **Hybrid Retrieval System**: Combines FAISS semantic search with BM25 keyword search via adaptive Reciprocal Rank Fusion
-- **Adaptive Query Classification**: Automatically detects query types (named entity, exact phrase, concept, comparative) and adjusts ranking weights
-- **Multi-LLM Support**: Choose between OpenAI (GPT-4o-mini), Google Gemini, and Grok (xAI) with automatic fallback
+- **Hybrid Retrieval**: FAISS semantic search + BM25 keyword search fused via canonical Reciprocal Rank Fusion
+- **Signal-Blending Query Classification**: Weighted blend over exact phrase, named entity, single/multi-concept, general topic, comparative signals — produces a continuous RRF weight rather than forcing each query into a single bucket
+- **Verse-Reference Short-Circuit**: `John 3:16`, `1 Cor 13:4-7`, `Rom 8.28` skip FAISS + BM25 and return the exact verse(s) directly — no embedding call, ~5ms
+- **Multi-LLM Support**: OpenAI (GPT-4o-mini), Google Gemini, and Grok (xAI) with automatic fallback for summarization
 - **AI Summarization with Citations**: Every claim includes inline `[verse_id]` citations grounded in retrieved verses
 - **Adjustable Analysis Depth**: Quick (7 verses), Balanced (12 verses), or Comprehensive (20 verses) summarization tiers
-- **Full Chapter Reading**: View complete chapters with verse highlighting for contextual understanding
-- **3-Layer Filtering**: Individual FAISS and BM25 thresholds plus RRF fusion threshold for precision
-- **Explore Mode**: Infinite scroll with detailed scoring breakdowns (FAISS score, BM25 score, ranks)
-- **Pre-built Search Indices**: FAISS and BM25 indices included — search works immediately without setup
-- **Search History**: Persists recent searches for quick access
-- **React + FastAPI Stack**: Modern, responsive frontend with a production-ready API backend
+- **Full Chapter Reading**: View complete chapters with verse highlighting
+- **Adaptive Thresholds**: FAISS cosine threshold, dynamic BM25 cutoff (relative to top hit), RRF threshold on a normalized 0–1 scale
+- **Persistent Caching**: SQLite-backed embedding cache (default 90-day TTL) eliminates repeat OpenAI calls; summary cache (7-day TTL) survives restarts
+- **Explore Mode**: Infinite scroll with per-result scoring breakdown (FAISS score, BM25 score, fusion score, ranks)
+- **Pre-built Search Indices**: FAISS and BM25 indices ship with the repo — no re-embedding required
+- **Search History**: Persisted recent searches for quick access
+- **React + FastAPI Stack**: Modern responsive frontend with a production-ready API backend
 
 ## UI Walkthrough
 
@@ -125,10 +127,16 @@ The system features a sophisticated multi-component architecture:
 - **Verse Metadata Store**: Complete Bible text with book and chapter metadata
 
 ### **Hybrid Retrieval System**
-- **Adaptive Weighted RRF**: `RRF_Score = α × (1/(faiss_rank + 60)) + (1-α) × (1/(bm25_rank + 60))`
-- **Query Classifier**: Regex-based detection of named entities, exact phrases, comparatives, and concepts
-- **Dynamic Alpha Weighting**: α ranges from 0.25 (exact phrases) to 0.70 (general topics)
-- **3-Layer Threshold Filtering**: FAISS (0.20), BM25 (0.5), and RRF (0.003) minimums
+- **Canonical RRF**: each retriever contributes only when it actually returned the document:
+  ```
+  rrf = α × 1/(faiss_rank + k)    if doc in FAISS, else 0
+      + (1-α) × 1/(bm25_rank + k) if doc in BM25,  else 0
+  ```
+  Normalized to [0, 1] before the RRF threshold is applied.
+- **Signal-Blending Classifier**: weighted mean of per-signal target alphas, anchored by a baseline at `alpha_default`. Dominant signal is reported for observability; retrieval uses the blended α.
+- **Continuous Alpha**: roughly [0.22, 0.75] depending on which signals fire. Exact-phrase-heavy queries pull toward keyword; general-topic-heavy queries pull toward semantic; mixed queries land in between.
+- **Adaptive Thresholds**: FAISS cosine minimum (0.20 default), dynamic BM25 cutoff (`max(bm25_min_score, top × bm25_relative_threshold)`) to handle term-rarity scale, RRF minimum on normalized 0–1 scale (0.15 default).
+- **Verse-Reference Short-Circuit**: parses `Book Chapter:Verse` (with common abbreviations and ranges), bypasses FAISS+BM25, returns via O(1) lookup.
 
 ### **LLM Integration**
 - **OpenAI**: GPT-4o-mini for summarization (default)
@@ -137,10 +145,10 @@ The system features a sophisticated multi-component architecture:
 - **Automatic Fallback**: Primary → OpenAI → Gemini → Grok → Error
 
 ### **API & Interface**
-- **FastAPI Backend**: Production-ready API with health checks, interactive Swagger docs, and CORS support
-- **React + TypeScript Frontend**: Built with Vite, shadcn/ui, TailwindCSS, and Zustand state management
-- **React Query**: Server state management with @tanstack/react-query
-- **Canonical Query Caching**: 7-day in-memory cache for common searches (grace, faith, love, etc.)
+- **FastAPI Backend**: Production-ready API with health check, interactive Swagger docs, and CORS support
+- **React + TypeScript Frontend**: Vite, shadcn/ui, TailwindCSS, Zustand state, TanStack Query
+- **SQLite-Backed Caches** (`backend/vector_store/cache.db`): embedding cache (90-day TTL by default, or disable) saves repeat OpenAI calls; summary cache (7-day TTL) survives restarts. Both caches are size-cappable for constrained deployments.
+- **O(1) Verse & Chapter Lookups**: `/verses/{id}` and `/chapters/{book}/{chapter}` use pre-built dicts, not linear scans over metadata.
 
 ## Installation
 
@@ -155,8 +163,8 @@ The system features a sophisticated multi-component architecture:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/richie-rk/VerseFinder-AI.git
-   cd VerseFinder-AI
+   git clone https://github.com/richie-rk/Bible-VerseFinder-AI.git
+   cd Bible-VerseFinder-AI
    ```
 
 2. **Backend setup**:
@@ -181,7 +189,9 @@ The system features a sophisticated multi-component architecture:
    # LLM_PROVIDER=openai
    ```
 
-   > **Note**: The FAISS and BM25 search indices are pre-built and included in `backend/vector_store/`. No additional data setup is needed. Search works without API keys — keys are only required for the AI summarization feature.
+   > **Note**: The FAISS and BM25 search indices are pre-built and included in `backend/vector_store/`. No additional data setup is needed.
+   >
+   > **API keys**: `OPENAI_API_KEY` is required for semantic and hybrid search (the query is embedded at call time). Pure keyword search (`mode=keyword`) and verse-reference lookups (`John 3:16`) work without any API key. Summarization needs an OpenAI / Gemini / Grok key for whichever provider is active.
 
 ## Usage
 
@@ -221,7 +231,7 @@ The backend is fully configurable through environment variables or a `.env` file
 
 ```bash
 # LLM Configuration
-OPENAI_API_KEY=sk-your-key              # Required for embeddings + summarization
+OPENAI_API_KEY=sk-your-key              # Required for semantic + hybrid search (query embeddings)
 GEMINI_API_KEY=your-key                  # Optional: Gemini summarization
 GROK_API_KEY=your-key                    # Optional: Grok summarization
 LLM_PROVIDER=openai                      # Default provider: openai | gemini | grok
@@ -231,25 +241,37 @@ OPENAI_SUMMARIZATION_MODEL=gpt-4o-mini
 GEMINI_SUMMARIZATION_MODEL=gemini-1.5-flash
 GROK_SUMMARIZATION_MODEL=grok-beta
 
-# Search Thresholds
-FAISS_THRESHOLD=0.20                     # Semantic similarity minimum
-BM25_THRESHOLD=0.5                       # Keyword score minimum
-RRF_THRESHOLD=0.003                      # Fusion score minimum
-RRF_K=60                                 # RRF constant
+# Retrieval
+SEARCH_K=200                             # Candidates per retriever before RRF fusion
+
+# Thresholds
+FAISS_THRESHOLD=0.20                     # Semantic cosine minimum
+BM25_MIN_SCORE=0.1                       # Absolute BM25 floor (noise rejection)
+BM25_RELATIVE_THRESHOLD=0.05             # Keep BM25 results >= 5% of top score
+RRF_THRESHOLD=0.15                       # Normalized [0-1] RRF minimum
+RRF_K=60                                 # RRF smoothing constant
+
+# Caching (SQLite, backend/vector_store/cache.db)
+EMBEDDING_CACHE_TTL_DAYS=90              # 0 = never expire
+EMBEDDING_CACHE_MAX_ENTRIES=0            # 0 = no LRU cap
+SUMMARY_CACHE_TTL_DAYS=7
+SUMMARY_CACHE_MAX_ENTRIES=0
 
 # Pagination
 DEFAULT_PAGE_SIZE=50
 MAX_PAGE_SIZE=100
 
-# Alpha Weights (query type → semantic vs keyword balance)
-ALPHA_NAMED_ENTITY=0.38                  # "Jesus teaches" → favor keywords
-ALPHA_EXACT_PHRASE=0.25                  # "born again" → strongly favor keywords
-ALPHA_SINGLE_CONCEPT=0.65               # "grace" → favor semantics
-ALPHA_MULTI_CONCEPT=0.60                # "grace and faith"
-ALPHA_GENERAL_TOPIC=0.70                # "What about suffering?" → favor semantics
-ALPHA_COMPARATIVE=0.65                   # "grace vs mercy"
-ALPHA_DEFAULT=0.50                       # Fallback
+# Alpha Target Values (signal-blending classifier — see claude/design-decisions.md)
+ALPHA_NAMED_ENTITY=0.38                  # Named-entity signal target (e.g. "Jesus", "Paul")
+ALPHA_EXACT_PHRASE=0.25                  # Canonical phrases (e.g. "born again")
+ALPHA_SINGLE_CONCEPT=0.65                # Single theological concept (e.g. "grace")
+ALPHA_MULTI_CONCEPT=0.60                 # Multiple concepts (e.g. "grace and faith")
+ALPHA_GENERAL_TOPIC=0.70                 # Question form (e.g. "What about suffering?")
+ALPHA_COMPARATIVE=0.65                   # Comparative form (e.g. "grace vs mercy")
+ALPHA_DEFAULT=0.50                       # Baseline anchor when no strong signal fires
 ```
+
+> Mixed queries (e.g. `"What does Jesus say about grace?"`) fire multiple signals at once, so the final α is a weighted blend of these targets rather than any single one of them.
 
 ### **Example .env File**
 
@@ -296,6 +318,13 @@ cd scripts
 uv run python create_faiss_index.py    # Requires OPENAI_API_KEY
 uv run python create_bm25_index.py
 ```
+
+---
+
+## Further reading
+
+- **`CLAUDE.md`** — code-comment conventions for this repo (senior-engineer voice, no AI-generated tells).
+- **`claude/design-decisions.md`** — rationale for the major architectural choices (signal-blending classifier, verse-reference short-circuit, canonical RRF, SQLite caches, cache-TTL split). Update it when you make a decision worth preserving.
 
 ---
 

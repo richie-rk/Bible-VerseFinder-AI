@@ -1,11 +1,7 @@
 """
-Summarization service for Bible verses.
-
-Uses Query-Focused Abstractive Summarization with:
-- Multi-Hop Reasoning (link verses together)
-- Citation Tracking (every claim cites [verse_id])
-- Structured JSON responses
-- Grounding in retrieved verses (no hallucination)
+LLM-based summarization of retrieved verses. Strictly grounded: the prompt
+forbids the model from adding facts beyond what's in the passed verses, and
+every claim must inline-cite its source verse_id.
 """
 
 import hashlib
@@ -28,13 +24,11 @@ from ..models.schemas import (
 from .cache import SqliteCache
 from .llm import get_llm_with_fallback
 
-# Type alias for verses (can be either VerseResult or VerseInput)
 VerseType = VerseResult | VerseInput
 
 logger = logging.getLogger(__name__)
 
-# Persistent summary cache — backed by SQLite so we don't re-pay the LLM for
-# canonical queries across restarts. See cache.py for storage details.
+# SQLite-backed so canonical-query summaries survive restarts.
 _summary_cache_instance: SqliteCache | None = None
 
 
