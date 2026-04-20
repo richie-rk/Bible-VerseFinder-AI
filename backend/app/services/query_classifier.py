@@ -1,20 +1,16 @@
 """
-Query classifier — signal-blending design.
+Signal-blending query classifier.
 
-Computes a continuous alpha (RRF fusion weight between FAISS and BM25) as a
-weighted blend of feature signals, rather than picking one branch from a
-mutually-exclusive cascade. A mixed query like "What does Jesus say about
-grace?" fires three signals (named entity + concept + general topic) and the
-resulting alpha sits between each signal's target — not pinned to whichever
-branch happened to match first.
+Computes a continuous RRF fusion weight (alpha) as the weighted mean of
+per-signal target alphas, anchored by a baseline. Each feature signal
+contributes a strength in [0, 1] proportional to how much it fired, so mixed
+queries (e.g. "What does Jesus say about grace?" — named entity + concept +
+general topic) produce a blend between the constituent targets rather than
+collapsing to whichever rule matched first.
 
-Public API is unchanged:
-    classify_query(query: str) -> tuple[QueryType, float]
-
-The second element is the blended alpha (used by search.py for RRF fusion).
-The first element is the highest-strength signal — used only for UI display
-(ResultsHeader.tsx) and for debugging. Retrieval quality depends on alpha, not
-on the reported QueryType.
+Public API: `classify_query(query) -> (QueryType, float)`. The QueryType is
+the dominant signal; it's returned for observability only. Retrieval uses
+alpha.
 """
 
 import re
@@ -27,28 +23,21 @@ from ..models.schemas import QueryType
 
 _STOPWORDS = frozenset(BIBLICAL_STOPWORDS)
 
-# Weight given to the baseline (alpha_default) in the blend. Lower values let
-# signal alphas pull further from the default; higher values pin alpha close
-# to default. 0.3 gives strong signals meaningful influence without letting a
-# single weak match swing alpha to an extreme.
+# Lower baseline weight lets strong signals pull alpha further from the
+# default; 0.3 keeps a lone weak signal from swinging the blend.
 _BASELINE_WEIGHT = 0.3
 
-# Any signal below this strength is ignored when picking the dominant query
-# type (the blend still includes it). Prevents DEFAULT queries from reporting
-# a noise signal as their type.
+# Strengths below this count toward the blend but aren't eligible as the
+# dominant reported type.
 _SIGNAL_FLOOR = 0.2
 
-# Damping applied to multi-concept strength when there is no explicit
-# conjunction ("and", "with", comma list).
+# "grace mercy faith" (no conjunction) should still register as multi-concept,
+# just less confidently than "grace and mercy and faith".
 _IMPLICIT_MULTI_DAMPING = 0.7
 
-# General-topic strength when a boilerplate wrapper ("verses about X") matches
-# but the query isn't otherwise phrased as a question. Kept below 0.5 so
-# concept/named-entity signals on the stripped query can still dominate.
+# "verses about X" fires general-topic weakly so the inner concept still wins;
+# bare interrogatives fire it at 1.0 so they outrank single-concept at ties.
 _BOILERPLATE_GENERAL_STRENGTH = 0.3
-
-# General-topic strength when a soft topic indicator matches ("teachings on",
-# "what does X say").
 _SOFT_TOPIC_STRENGTH = 0.5
 
 
@@ -90,7 +79,6 @@ _COMPARATIVE_PATTERNS = [
     ]
 ]
 
-# Interrogative openings — strong signal the user is asking a general question.
 _INTERROGATIVE_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
@@ -103,7 +91,6 @@ _INTERROGATIVE_PATTERNS = [
     ]
 ]
 
-# Softer topic indicators — weaker general-topic signal.
 _SOFT_TOPIC_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
@@ -112,8 +99,6 @@ _SOFT_TOPIC_PATTERNS = [
     ]
 ]
 
-# Boilerplate wrappers that should be stripped before content tokenization.
-# The inner query is the user's real intent.
 _BOILERPLATE_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
@@ -134,11 +119,9 @@ _CONJUNCTION_PATTERNS = [
 ]
 
 
-# Dominant-type preference order for breaking strength ties.
-# More specific signals win. DEFAULT is never chosen by tie-break — it's only
-# the fallback when no signal clears _SIGNAL_FLOOR. GENERAL_TOPIC sits above
-# SINGLE/MULTI so interrogative queries ("How should I pray?") report as
-# GENERAL_TOPIC rather than SINGLE_CONCEPT when strengths tie at 1.0.
+# Tie-break order: more specific signals win. GENERAL_TOPIC outranks
+# SINGLE/MULTI so "How should I pray?" reports as general-topic rather than
+# single-concept when both strengths are 1.0.
 _TYPE_PRIORITY = [
     QueryType.EXACT_PHRASE,
     QueryType.COMPARATIVE,
@@ -150,7 +133,6 @@ _TYPE_PRIORITY = [
 
 
 def _strip_boilerplate(query_lower: str) -> str:
-    """Remove "verses about X" style wrappers so the inner query dominates."""
     for pat in _BOILERPLATE_PATTERNS:
         stripped = pat.sub("", query_lower)
         if stripped != query_lower:
@@ -159,7 +141,6 @@ def _strip_boilerplate(query_lower: str) -> str:
 
 
 def _tokenize_content(text: str) -> list[str]:
-    """Word-boundary tokenize, drop tokens ≤2 chars or in the stopword list."""
     tokens = re.findall(r"\b\w+\b", text)
     return [t for t in tokens if len(t) > 2 and t not in _STOPWORDS]
 
@@ -216,15 +197,9 @@ def _score_concept_arity(
     concept_strength: float,
     has_conjunction: bool,
 ) -> tuple[float, float]:
-    """
-    Split concept_strength into (single, multi) based on content-token count
-    and whether an explicit conjunction is present.
-
-    - Explicit conjunction: pure multi.
-    - 1 content token, no conjunction: pure single.
-    - 2 content tokens, no conjunction: ambiguous — half single, half multi.
-    - ≥3 content tokens, no conjunction: multi (damped).
-    """
+    # Splits concept_strength into (single, multi). Arity is genuinely
+    # ambiguous at n=2 with no conjunction ("God's love" could read either
+    # way), so that case contributes to both at half weight.
     n = len(content_tokens)
     if n == 0 or concept_strength <= 0.0:
         return 0.0, 0.0
@@ -258,7 +233,6 @@ def _dominant_type(
     if max_strength < _SIGNAL_FLOOR:
         return QueryType.DEFAULT
 
-    # Collect all types at the max strength (within float tolerance).
     tied = {qt for qt, s, _ in signals if abs(s - max_strength) < 1e-9}
     for qt in _TYPE_PRIORITY:
         if qt in tied:
@@ -267,14 +241,6 @@ def _dominant_type(
 
 
 def classify_query(query: str) -> tuple[QueryType, float]:
-    """
-    Classify a search query and return (dominant_type, blended_alpha).
-
-    The blended alpha is the weighted mean of each signal's target alpha, with
-    a baseline anchor at alpha_default. The dominant type is the
-    highest-strength signal (tie-broken by _TYPE_PRIORITY), used for
-    observability. Retrieval uses the alpha.
-    """
     if not query or not query.strip():
         return QueryType.DEFAULT, settings.alpha_default
 

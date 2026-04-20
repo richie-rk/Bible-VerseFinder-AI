@@ -1,23 +1,16 @@
 """
 Shared vocabularies for the query classifier and the summarizer.
 
-Splits into three sets:
+CANONICAL_QUERIES: short, stable queries eligible for the summarizer cache.
+Changing this set invalidates cache keys — add conservatively.
 
-- `CANONICAL_QUERIES`: small, stable set of one/two-word theological queries
-  eligible for the summarizer's 7-day cache. Changing this set invalidates
-  cache keys, so keep additions conservative.
+CONCEPT_VOCAB: tokens used to compute concept-density in the classifier.
+Deliberately narrow — ambiguous words like "light", "born", "law", "flesh"
+are excluded so phrases like "born again" or "light of the world" stay
+purely EXACT_PHRASE rather than picking up stray concept strength.
 
-- `CONCEPT_VOCAB`: single-token theological / abstract concepts the classifier
-  uses to compute concept-density. Kept deliberately narrow — only tokens
-  that are almost always theological-concept when they appear in a query.
-  Ambiguous words (e.g. "light", "born", "law", "flesh") are excluded to
-  avoid producing spurious concept signals on phrases like "born again" or
-  "light of the world" that should classify as EXACT_PHRASE.
-
-- `BIBLICAL_NAMES`: proper nouns (people, places, titles, supernatural
-  entities) used to compute named-entity density. Weighted toward New
-  Testament figures because the corpus is NT-only (Matthew–Revelation,
-  7,953 verses).
+BIBLICAL_NAMES: proper nouns for named-entity density. NT-heavy to match the
+corpus.
 """
 
 

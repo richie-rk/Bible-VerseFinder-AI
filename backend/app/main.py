@@ -1,7 +1,7 @@
 """
-VerseFinder AI - FastAPI Backend
+Bible Verse Finder AI — FastAPI backend.
 
-Hybrid semantic + keyword search for Bible verses using FAISS + BM25 with RRF fusion.
+Hybrid semantic + keyword Bible verse search with FAISS + BM25 + RRF fusion.
 """
 
 import time
@@ -47,10 +47,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],  # narrow this for production deployments
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -105,7 +104,6 @@ async def search_verses(
             detail="Search indices not loaded. Ensure vector_store/ exists in backend/",
         )
 
-    # Perform search
     search_start = time.perf_counter()
     results, total_count, query_type, alpha = search_service.search(
         query=query,
@@ -115,12 +113,10 @@ async def search_verses(
     )
     search_ms = (time.perf_counter() - search_start) * 1000
 
-    # Calculate pagination metadata
     returned = len(results)
     has_more = offset + limit < total_count
     next_offset = offset + limit if has_more else None
 
-    # Build response
     total_ms = (time.perf_counter() - start_time) * 1000
 
     return SearchResponse(
@@ -134,9 +130,7 @@ async def search_verses(
         ),
         thresholds_applied=ThresholdsApplied(
             faiss=settings.faiss_threshold,
-            # BM25 threshold is now dynamic — the effective cutoff per query is
-            # max(bm25_min_score, top_bm25 * bm25_relative_threshold). The
-            # response chip reports the absolute floor.
+            # bm25 threshold is dynamic per query; report the absolute floor.
             bm25=settings.bm25_min_score,
             rrf=settings.rrf_threshold,
         ),
@@ -223,12 +217,9 @@ async def summarize_search_results(request: SummarizeRequest):
     start_time = time.perf_counter()
     search_ms = 0.0
 
-    # Check if verses were provided (skip search)
     if request.verses:
-        # Use pre-retrieved verses directly
         verses_for_summary = request.verses
     else:
-        # Need to perform search
         search_service = get_search_service()
 
         if not search_service.is_loaded:
@@ -237,7 +228,6 @@ async def summarize_search_results(request: SummarizeRequest):
                 detail="Search indices not loaded. Ensure vector_store/ exists in backend/",
             )
 
-        # Determine top_k based on depth if not specified
         top_k = request.top_k
         if top_k is None:
             top_k = {
@@ -246,7 +236,6 @@ async def summarize_search_results(request: SummarizeRequest):
                 SummarizationDepth.COMPREHENSIVE: 20,
             }[request.depth]
 
-        # Search for relevant verses
         search_start = time.perf_counter()
         results, total_count, query_type, alpha = search_service.search(
             query=request.query,
@@ -262,13 +251,11 @@ async def summarize_search_results(request: SummarizeRequest):
                 detail=f"No verses found for query: {request.query}",
             )
 
-        # Convert VerseResult to VerseInput format
         verses_for_summary = [
             VerseInput(verse_id=v.verse_id, book=v.book, text=v.text)
             for v in results
         ]
 
-    # Generate summary
     try:
         response = await summarize_verses(
             query=request.query,
@@ -276,7 +263,6 @@ async def summarize_search_results(request: SummarizeRequest):
             depth=request.depth,
             provider=request.provider,
         )
-        # Update search timing
         response.timing.search_ms = round(search_ms, 2)
         return response
 
@@ -310,7 +296,7 @@ async def get_chapter(book: str, chapter: int):
             detail="Search indices not loaded",
         )
 
-    # Normalize book name (handle both "1_John" and "1 John" formats)
+    # Accepts both "1 John" and "1_John" for URL-friendliness.
     book_normalized = book.replace("_", " ")
 
     verses = search_service.get_chapter(book_normalized, chapter)

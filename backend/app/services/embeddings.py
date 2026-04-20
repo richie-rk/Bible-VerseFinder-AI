@@ -5,8 +5,6 @@ from ..core.config import settings
 from .cache import SqliteCache
 
 
-# Lazy singletons — created on first call so tests can monkeypatch settings
-# before the cache is ever opened.
 _client: OpenAI | None = None
 _cache: SqliteCache | None = None
 
@@ -31,25 +29,18 @@ def _get_cache() -> SqliteCache:
 
 
 def _cache_key(text: str) -> str:
-    # Include the model in the key so upgrading to text-embedding-3-large (or
-    # OpenAI publishing a v2 under a new name) naturally invalidates old rows.
+    # Model name in the key so a switch to text-embedding-3-large (or a v2
+    # under a new name) ages old entries out naturally.
     return f"{settings.embedding_model}:{text.strip()}"
 
 
 def get_embedding(text: str) -> np.ndarray:
-    """
-    Return a normalized embedding for `text`.
-
-    Uses a SQLite-backed cache keyed by (model, stripped text). Embeddings are
-    deterministic given the same input and model, so cache hits are free wins:
-    no OpenAI call, no network round-trip, no $.
-    """
     cache = _get_cache()
     key = _cache_key(text)
 
     cached = cache.get(key)
     if cached is not None:
-        # np.frombuffer returns a read-only view; copy so callers can mutate.
+        # np.frombuffer yields a read-only view; copy so callers may mutate.
         return np.frombuffer(cached, dtype=np.float32).copy()
 
     response = _get_client().embeddings.create(
@@ -58,7 +49,7 @@ def get_embedding(text: str) -> np.ndarray:
     )
     embedding = np.array(response.data[0].embedding, dtype=np.float32)
 
-    # Normalize for cosine similarity (FAISS IndexFlatIP).
+    # Required for IndexFlatIP to behave as cosine similarity.
     norm = np.linalg.norm(embedding)
     if norm > 0:
         embedding = embedding / norm
