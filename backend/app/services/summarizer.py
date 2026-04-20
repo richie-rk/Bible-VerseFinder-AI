@@ -25,6 +25,7 @@ from ..models.schemas import (
     TimingInfo,
     SummarizationDepth,
 )
+from .cache import SqliteCache
 from .llm import get_llm_with_fallback
 
 # Type alias for verses (can be either VerseResult or VerseInput)
@@ -32,9 +33,21 @@ VerseType = VerseResult | VerseInput
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for summaries (production would use Redis)
-_summary_cache: dict[str, tuple[SummarizationResponse, float]] = {}
-CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
+# Persistent summary cache — backed by SQLite so we don't re-pay the LLM for
+# canonical queries across restarts. See cache.py for storage details.
+_summary_cache_instance: SqliteCache | None = None
+
+
+def _get_summary_cache() -> SqliteCache:
+    global _summary_cache_instance
+    if _summary_cache_instance is None:
+        _summary_cache_instance = SqliteCache(
+            db_path=settings.vector_store_path / "cache.db",
+            table_name="summaries",
+            ttl_seconds=settings.summary_cache_ttl_days * 24 * 3600,
+            max_entries=settings.summary_cache_max_entries,
+        )
+    return _summary_cache_instance
 
 SUMMARIZATION_SYSTEM_PROMPT = """You are a Biblical scholar assistant. Your task is to summarize and synthesize Bible verses to answer the user's question.
 
@@ -92,20 +105,23 @@ def _is_cacheable_query(query: str) -> bool:
 
 
 def _get_cached_summary(cache_key: str) -> SummarizationResponse | None:
-    """Get cached summary if exists and not expired."""
-    if cache_key in _summary_cache:
-        response, timestamp = _summary_cache[cache_key]
-        if time.time() - timestamp < CACHE_TTL_SECONDS:
-            logger.info(f"Cache hit for key {cache_key[:8]}...")
-            return response
-        else:
-            # Expired, remove from cache
-            del _summary_cache[cache_key]
-    return None
+    """Return the cached summary for this key, or None on miss / expiry."""
+    payload = _get_summary_cache().get(cache_key)
+    if payload is None:
+        return None
+    try:
+        response = SummarizationResponse.model_validate_json(payload)
+    except Exception as e:
+        # Schema drifted since this row was cached — treat as miss and move on.
+        logger.warning(f"Summary cache row deserialization failed for {cache_key[:8]}: {e}")
+        _get_summary_cache().delete(cache_key)
+        return None
+    logger.info(f"Cache hit for key {cache_key[:8]}...")
+    return response
 
 
 def _cache_summary(cache_key: str, response: SummarizationResponse) -> None:
-    _summary_cache[cache_key] = (response, time.time())
+    _get_summary_cache().set(cache_key, response.model_dump_json().encode("utf-8"))
     logger.info(f"Cached summary for key {cache_key[:8]}...")
 
 

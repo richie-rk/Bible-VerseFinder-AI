@@ -169,19 +169,17 @@ async def get_verse(verse_id: str):
             detail="Search indices not loaded",
         )
 
-    # Search through metadata
-    for verse in search_service._metadata:
-        if verse["verse_id"] == verse_id:
-            return {
-                "verse_id": verse["verse_id"],
-                "book": verse["book"],
-                "text": verse["text"],
-            }
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Verse not found: {verse_id}",
-    )
+    verse = search_service.get_verse(verse_id)
+    if verse is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Verse not found: {verse_id}",
+        )
+    return {
+        "verse_id": verse["verse_id"],
+        "book": verse["book"],
+        "text": verse["text"],
+    }
 
 
 @app.post("/summarize", response_model=SummarizationResponse)
@@ -315,33 +313,25 @@ async def get_chapter(book: str, chapter: int):
     # Normalize book name (handle both "1_John" and "1 John" formats)
     book_normalized = book.replace("_", " ")
 
-    # Find all verses matching book and chapter
-    chapter_verses = []
-    for verse in search_service._metadata:
-        verse_book = verse.get("book", "")
-        verse_chapter = verse.get("chapter")
-
-        if verse_book == book_normalized and verse_chapter == chapter:
-            chapter_verses.append({
-                "verse_id": verse["verse_id"],
-                "verse_num": verse.get("verse_num", 0),
-                "text": verse["text"],
-            })
-
-    if not chapter_verses:
+    verses = search_service.get_chapter(book_normalized, chapter)
+    if not verses:
         raise HTTPException(
             status_code=404,
             detail=f"Chapter not found: {book_normalized} {chapter}",
         )
 
-    # Sort by verse number
-    chapter_verses.sort(key=lambda v: v["verse_num"])
-
     return {
         "book": book_normalized,
         "chapter": chapter,
-        "total_verses": len(chapter_verses),
-        "verses": chapter_verses,
+        "total_verses": len(verses),
+        "verses": [
+            {
+                "verse_id": v["verse_id"],
+                "verse_num": v.get("verse_num", 0),
+                "text": v["text"],
+            }
+            for v in verses
+        ],
     }
 
 

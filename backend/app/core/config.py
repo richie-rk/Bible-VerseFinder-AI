@@ -72,6 +72,23 @@ class Settings(BaseSettings):
     alpha_comparative: float = 0.65
     alpha_default: float = 0.50
 
+    # Cache (SQLite, backend/vector_store/cache.db)
+    #
+    # Embeddings: deterministic function of (text, model). They effectively
+    # never go stale — only expire as insurance against OpenAI silently
+    # retraining the model under the same name. 90-day TTL is a safe
+    # default; set EMBEDDING_CACHE_TTL_DAYS=0 to disable TTL entirely.
+    #
+    # Summaries: LLM outputs are non-deterministic and prompts/models
+    # evolve. 7-day TTL matches the prior in-memory cache.
+    #
+    # max_entries=0 means no cap. Deployments with tight disk budgets
+    # should set a positive cap; the cache then evicts LRU on write.
+    embedding_cache_ttl_days: int = int(os.getenv("EMBEDDING_CACHE_TTL_DAYS", "90"))
+    embedding_cache_max_entries: int = int(os.getenv("EMBEDDING_CACHE_MAX_ENTRIES", "0"))
+    summary_cache_ttl_days: int = int(os.getenv("SUMMARY_CACHE_TTL_DAYS", "7"))
+    summary_cache_max_entries: int = int(os.getenv("SUMMARY_CACHE_MAX_ENTRIES", "0"))
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
