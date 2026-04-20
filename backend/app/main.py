@@ -134,7 +134,10 @@ async def search_verses(
         ),
         thresholds_applied=ThresholdsApplied(
             faiss=settings.faiss_threshold,
-            bm25=settings.bm25_threshold,
+            # BM25 threshold is now dynamic — the effective cutoff per query is
+            # max(bm25_min_score, top_bm25 * bm25_relative_threshold). The
+            # response chip reports the absolute floor.
+            bm25=settings.bm25_min_score,
             rrf=settings.rrf_threshold,
         ),
         pagination=PaginationMeta(

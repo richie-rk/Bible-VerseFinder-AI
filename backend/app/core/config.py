@@ -34,12 +34,26 @@ class Settings(BaseSettings):
     vector_store_path: Path = Path(__file__).parent.parent.parent / "vector_store"
 
     # Search Parameters
-    search_k: int = int(os.getenv("SEARCH_K", "100"))  # k=100 default, upgrade to 200 later
+    # search_k: how many candidates each retriever returns before RRF fusion.
+    # Larger pool = more recall for hybrid (a doc at rank 60 in FAISS and rank 140
+    # in BM25 only makes it into fusion if both k's are >=140). FAISS IndexFlatIP
+    # over ~8k vectors is ~1-2ms so 200 is not a latency concern.
+    search_k: int = int(os.getenv("SEARCH_K", "200"))
 
     # Thresholds (3-layer filtering)
     faiss_threshold: float = 0.20    # Layer 1: Semantic similarity minimum (lowered from 0.35)
-    bm25_threshold: float = 0.5      # Layer 2: BM25 score minimum (lowered from 5.0)
-    rrf_threshold: float = 0.003     # Layer 3: Final RRF score minimum (lowered from 0.005)
+
+    # Layer 2: BM25 dynamic threshold. Absolute BM25 scores vary wildly with
+    # query-term rarity, so a single fixed cutoff is wrong for most queries.
+    # Keep results scoring >= max(bm25_min_score, top_bm25 * bm25_relative_threshold).
+    bm25_min_score: float = 0.1              # Absolute floor for noise rejection
+    bm25_relative_threshold: float = 0.05    # Fraction of top BM25 score to keep
+
+    # Layer 3: RRF threshold, applied to the NORMALIZED (0-1) score.
+    # The raw RRF formula peaks at 1/(1+k) ≈ 0.0164 for k=60, so a raw cutoff like
+    # 0.003 was really ~0.18 on the normalized scale — confusing to tune. We now
+    # normalize first and threshold on a 0-1 scale users can reason about directly.
+    rrf_threshold: float = 0.15
 
     # RRF constant (standard is 60)
     rrf_k: int = 60
