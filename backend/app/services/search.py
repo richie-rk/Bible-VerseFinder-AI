@@ -8,6 +8,7 @@ Where α varies based on query type.
 """
 
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import bm25s
@@ -29,6 +30,11 @@ class SearchService:
         self._faiss_index: faiss.IndexFlatIP | None = None
         self._bm25_index: bm25s.BM25 | None = None
         self._metadata: list[dict] | None = None
+        # O(1) lookup indices built from metadata at load time:
+        #   _by_verse_id: verse_id -> verse dict
+        #   _by_chapter:  (book, chapter) -> list of verse dicts sorted by verse_num
+        self._by_verse_id: dict[str, dict] | None = None
+        self._by_chapter: dict[tuple[str, int], list[dict]] | None = None
         self._stemmer = Stemmer.Stemmer("english")
         self._loaded = False
 
@@ -50,6 +56,17 @@ class SearchService:
             raise FileNotFoundError(f"Metadata not found: {metadata_path}")
         with open(metadata_path, "r", encoding="utf-8") as f:
             self._metadata = json.load(f)
+
+        # Build lookup indices once. These power the verse-ref short-circuit
+        # (Phase 2) and the /verses/{id} + /chapters/{book}/{chapter} endpoints,
+        # which previously scanned all ~8k verses linearly on every request.
+        self._by_verse_id = {v["verse_id"]: v for v in self._metadata}
+        chapters: dict[tuple[str, int], list[dict]] = defaultdict(list)
+        for v in self._metadata:
+            chapters[(v["book"], v["chapter"])].append(v)
+        for verses in chapters.values():
+            verses.sort(key=lambda v: v["verse_num"])
+        self._by_chapter = dict(chapters)
 
         # Load BM25 index
         bm25_path = vector_store / "bm25_index.bm25s"
@@ -210,22 +227,30 @@ class SearchService:
         rrf_results.sort(key=lambda x: x[1], reverse=True)
         return rrf_results
 
+    def get_verse(self, verse_id: str) -> dict | None:
+        """O(1) lookup for a single verse. Returns None if unknown."""
+        if not self._loaded:
+            self.load_indices()
+        assert self._by_verse_id is not None
+        return self._by_verse_id.get(verse_id)
+
+    def get_chapter(self, book: str, chapter: int) -> list[dict]:
+        """O(1) lookup for a chapter. Returns verses in canonical verse_num order, empty if unknown."""
+        if not self._loaded:
+            self.load_indices()
+        assert self._by_chapter is not None
+        return list(self._by_chapter.get((book, chapter), []))
+
     def _lookup_by_verse_ids(self, verse_ids: list[str]) -> list[dict]:
         """
         Return metadata entries for the given verse_ids, preserving input order.
         Unknown verse_ids are silently skipped (out-of-range verse numbers, etc.).
-
-        Linear scan over _metadata; Phase 4 will replace with an O(1) dict.
         """
-        if self._metadata is None:
+        if self._by_verse_id is None:
             return []
-        wanted = set(verse_ids)
-        by_id: dict[str, dict] = {}
-        for verse in self._metadata:
-            vid = verse["verse_id"]
-            if vid in wanted:
-                by_id[vid] = verse
-        return [by_id[vid] for vid in verse_ids if vid in by_id]
+        return [
+            self._by_verse_id[vid] for vid in verse_ids if vid in self._by_verse_id
+        ]
 
     def search(
         self,

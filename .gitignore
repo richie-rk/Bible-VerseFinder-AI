@@ -42,3 +42,7 @@ dist-ssr/
 
 # Local-only working directories (any folder prefixed with z_)
 z_*/
+
+# SQLite cache (embedding + summary caches, see backend/app/services/cache.py)
+backend/vector_store/cache.db
+backend/vector_store/cache.db-*
