@@ -223,3 +223,15 @@ def test_search_survives_unusable_embedding_cache(client, monkeypatch):
 
     r = client.get("/search", params={"query": "grace", "mode": "semantic", "limit": 3})
     assert r.status_code == 200, r.text
+
+
+def test_rate_limited_response_is_readable_cross_origin(client, monkeypatch):
+    """Browsers only see a 429 (and its Retry-After) if CORS headers are on it."""
+    monkeypatch.setattr(main.search_rate_limit, "limit", 1)
+    headers = {"Origin": "http://localhost:8080"}
+    params = {"query": "John 3:16", "mode": "keyword"}
+    assert client.get("/search", params=params, headers=headers).status_code == 200
+    r = client.get("/search", params=params, headers=headers)
+    assert r.status_code == 429
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:8080"
+    assert "retry-after" in r.headers.get("access-control-expose-headers", "").lower()
