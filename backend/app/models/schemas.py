@@ -1,7 +1,14 @@
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+from ..core.config import LLMProviderName, settings
+
+QueryText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=settings.max_query_length),
+]
 
 
 class SearchMode(str, Enum):
@@ -30,7 +37,14 @@ class VerseResult(BaseModel):
     verse_id: str = Field(..., description="Verse identifier (e.g., 'John_3:16')")
     book: str = Field(..., description="Book name")
     text: str = Field(..., description="Verse text")
-    score: float = Field(..., description="Final score (RRF for hybrid, raw for others)")
+    score: float = Field(
+        ...,
+        description=(
+            "Relevance score in [0, 1]. Its meaning depends on the mode: normalized RRF "
+            "(hybrid), cosine similarity (semantic), BM25 relative to the top hit (keyword, "
+            "and hybrid when it falls back to keyword), 1.0 for verse-reference lookups"
+        ),
+    )
     faiss_score: Optional[float] = Field(None, description="FAISS similarity score")
     faiss_rank: Optional[int] = Field(None, description="Rank in FAISS results")
     bm25_score: Optional[float] = Field(None, description="BM25 score")
@@ -64,10 +78,23 @@ class TimingInfo(BaseModel):
 
 class SearchResponse(BaseModel):
 
-    query: str = Field(..., description="Original search query")
+    query: str = Field(..., description="Search query (whitespace-trimmed)")
     mode: SearchMode = Field(..., description="Search mode used")
     query_type: QueryType = Field(..., description="Detected query type")
-    alpha: Optional[float] = Field(None, description="Alpha weight used (semantic vs keyword). Null for verse-reference lookups where no blending applies.")
+    alpha: Optional[float] = Field(
+        None,
+        description=(
+            "Alpha weight used (semantic vs keyword). Null when no blending applied: "
+            "verse-reference lookups, non-hybrid modes, and hybrid searches that fell back to keyword."
+        ),
+    )
+    notice: Optional[str] = Field(
+        None,
+        description=(
+            "User-facing note when the results differ from what the query implies, e.g. "
+            "keyword-only fallback, an Old Testament reference, or no exact match for a quoted phrase."
+        ),
+    )
     timing: TimingInfo = Field(..., description="Response timing")
     thresholds_applied: ThresholdsApplied = Field(..., description="Thresholds used")
     pagination: PaginationMeta = Field(..., description="Pagination info")
@@ -82,43 +109,79 @@ class HealthResponse(BaseModel):
     total_verses: int = Field(..., description="Total verses in index")
 
 
+class VerseDetail(BaseModel):
+
+    verse_id: str = Field(..., description="Canonical verse identifier (e.g., 'John_3:16')")
+    book: str = Field(..., description="Book name")
+    chapter: int = Field(..., description="Chapter number")
+    verse_num: int = Field(..., description="Verse number")
+    text: str = Field(..., description="Verse text")
+
+
+class ChapterVerse(BaseModel):
+
+    verse_id: str = Field(..., description="Verse identifier")
+    verse_num: int = Field(..., description="Verse number")
+    text: str = Field(..., description="Verse text")
+
+
+class ChapterResponse(BaseModel):
+
+    book: str = Field(..., description="Canonical book name (e.g., '1 John')")
+    chapter: int = Field(..., description="Chapter number")
+    total_chapters: int = Field(..., description="Number of chapters in this book")
+    total_verses: int = Field(..., description="Number of verses in this chapter")
+    verses: list[ChapterVerse] = Field(..., description="Verses in canonical order")
+
+
+class ProvidersResponse(BaseModel):
+
+    available_providers: list[str] = Field(..., description="Providers with an API key configured")
+    default_provider: str = Field(..., description="Provider tried first when none is requested")
+
+
 # Summarization Models
 
 class VerseInput(BaseModel):
-    """Verse input for summarization (from pre-retrieved search results)."""
+    """A pre-retrieved verse to summarize, identified by ID.
 
-    verse_id: str = Field(..., description="Verse identifier (e.g., 'John_3:16')")
-    book: str = Field(..., description="Book name")
-    text: str = Field(..., description="Full verse text")
+    The server looks the text up itself so callers can't inject their own
+    wording into the prompt or the shared summary cache. `book` and `text`
+    are still accepted for older clients but ignored.
+    """
+
+    verse_id: str = Field(..., min_length=1, max_length=64, description="Verse identifier (e.g., 'John_3:16')")
+    book: Optional[str] = Field(None, max_length=64, description="Ignored; kept for backward compatibility")
+    text: Optional[str] = Field(None, max_length=2000, description="Ignored; the server's copy of the verse is used")
 
 
 class SummarizationDepth(str, Enum):
 
-    QUICK = "quick"              # 300 tokens, top 7 verses
-    BALANCED = "balanced"        # 500 tokens, top 12 verses
-    COMPREHENSIVE = "comprehensive"  # 800 tokens, top 20 verses
+    QUICK = "quick"                  # top 7 verses
+    BALANCED = "balanced"            # top 12 verses
+    COMPREHENSIVE = "comprehensive"  # top 20 verses
 
 
 class SummarizeRequest(BaseModel):
 
-    query: str = Field(..., min_length=1, description="Search query (always required for LLM context)")
+    query: QueryText = Field(..., description="Search query (always required for LLM context)")
     verses: Optional[list[VerseInput]] = Field(
         None,
         min_length=1,
         max_length=30,
-        description="Pre-retrieved verses. If provided, skips search. Min 1, Max 30.",
+        description="Pre-retrieved verse IDs. If provided, skips search. Min 1, Max 30.",
     )
     mode: SearchMode = Field(default=SearchMode.HYBRID, description="Search mode (only used if verses not provided)")
     depth: SummarizationDepth = Field(default=SummarizationDepth.BALANCED, description="Summarization depth")
     top_k: Optional[int] = Field(default=None, ge=5, le=30, description="Number of verses (only used if verses not provided)")
-    provider: Optional[str] = Field(default=None, description="LLM provider (openai, gemini, grok)")
+    provider: Optional[LLMProviderName] = Field(default=None, description="Preferred LLM provider")
 
 
 class VerseCitation(BaseModel):
 
     verse_id: str = Field(..., description="Verse identifier (e.g., 'John_3:16')")
     text: str = Field(..., description="Full verse text")
-    relevance: str = Field(..., description="primary | supporting | contextual")
+    relevance: Literal["primary", "supporting", "contextual"] = Field(..., description="How directly the verse answers the query")
 
 
 class ThematicConnection(BaseModel):

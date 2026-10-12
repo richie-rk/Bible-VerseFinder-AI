@@ -1,5 +1,5 @@
 """
-Tests for the verse-reference parser and verse_id expander.
+Tests for the verse-reference parser and the book / verse-ID normalizers.
 
 Parser must accept common NT reference formats (full name, abbreviations,
 Roman-numeral ordinals, dot or colon separator, ranges with hyphen or en-dash)
@@ -10,8 +10,10 @@ import pytest
 
 from app.services.verse_reference import (
     ParsedReference,
+    canonical_verse_id,
+    normalize_book,
+    old_testament_reference_book,
     parse_verse_reference,
-    verse_ids_for,
 )
 
 
@@ -112,30 +114,78 @@ def test_parse_negative(query):
     assert parse_verse_reference(query) is None
 
 
-# ---------- verse_ids_for ----------
+# ---------- Number bounds ----------
 
-def test_verse_ids_single():
-    ref = ParsedReference("John", 3, 16, 16)
-    assert verse_ids_for(ref) == ["John_3:16"]
-
-
-def test_verse_ids_range():
-    ref = ParsedReference("1 Corinthians", 13, 4, 7)
-    assert verse_ids_for(ref) == [
-        "1_Corinthians_13:4",
-        "1_Corinthians_13:5",
-        "1_Corinthians_13:6",
-        "1_Corinthians_13:7",
-    ]
+@pytest.mark.parametrize(
+    "query",
+    [
+        "John 1:1-3000000",          # would expand to millions of verse IDs
+        "John 1:1-" + "9" * 5000,    # beyond int()'s 4300-digit limit
+        "John 1000:1",
+    ],
+)
+def test_parse_rejects_numbers_longer_than_three_digits(query):
+    assert parse_verse_reference(query) is None
 
 
-def test_verse_ids_preserves_book_spaces_as_underscores():
-    ref = ParsedReference("2 Thessalonians", 1, 3, 5)
-    assert verse_ids_for(ref) == [
-        "2_Thessalonians_1:3",
-        "2_Thessalonians_1:4",
-        "2_Thessalonians_1:5",
-    ]
+# ---------- normalize_book / canonical_verse_id ----------
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("John", "John"),
+        ("john", "John"),
+        ("JN", "John"),
+        ("1 John", "1 John"),
+        ("1_John", "1 John"),
+        ("1jn", "1 John"),
+        ("I John", "1 John"),
+        ("iii john", "3 John"),
+        ("FakeBook", None),
+        ("", None),
+        ("x" * 100, None),
+    ],
+)
+def test_normalize_book(raw, expected):
+    assert normalize_book(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("John_3:16", "John_3:16"),
+        ("john_3:16", "John_3:16"),
+        ("John 3:16", "John_3:16"),
+        ("1_John_4:8", "1_John_4:8"),
+        ("1 John_4:8", "1_John_4:8"),
+        ("1jn 4:8", "1_John_4:8"),
+        ("Rom_08:028", "Romans_8:28"),
+        ("Made_Up:1", None),
+        ("FakeBook_1:1", None),
+        ("John_3:1000", None),
+        ("_" * 5000, None),
+    ],
+)
+def test_canonical_verse_id(raw, expected):
+    assert canonical_verse_id(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("Genesis 1:1", "Genesis"),
+        ("Psalms 23:1", "Psalms"),
+        ("Ps 23:1-6", "Psalms"),
+        ("II Kings 2:11", "2 Kings"),
+        ("isa 53:5", "Isaiah"),
+        ("John 3:16", None),        # NT
+        ("Jesus 3:16", None),       # not a book
+        ("Genesis", None),          # not a reference
+        ("", None),
+    ],
+)
+def test_old_testament_reference_book(query, expected):
+    assert old_testament_reference_book(query) == expected
 
 
 # ---------- Integration with SearchService ----------
@@ -147,11 +197,12 @@ def test_search_short_circuits_verse_reference():
 
     svc = get_search_service()
     svc.load_indices()
-    results, total, qtype, alpha = svc.search("John 3:16", mode=SearchMode.HYBRID, limit=10)
+    outcome = svc.search("John 3:16", mode=SearchMode.HYBRID, limit=10)
+    results = outcome.results
 
-    assert qtype == QueryType.VERSE_REFERENCE
-    assert alpha is None
-    assert total == 1
+    assert outcome.query_type == QueryType.VERSE_REFERENCE
+    assert outcome.alpha is None
+    assert outcome.total == 1
     assert len(results) == 1
     assert results[0].verse_id == "John_3:16"
     assert results[0].book == "John"
@@ -167,12 +218,12 @@ def test_search_verse_reference_range():
 
     svc = get_search_service()
     svc.load_indices()
-    results, total, qtype, alpha = svc.search("1 Cor 13:4-7", limit=10)
+    outcome = svc.search("1 Cor 13:4-7", limit=10)
 
-    assert qtype == QueryType.VERSE_REFERENCE
-    assert alpha is None
-    assert total == 4
-    assert [r.verse_id for r in results] == [
+    assert outcome.query_type == QueryType.VERSE_REFERENCE
+    assert outcome.alpha is None
+    assert outcome.total == 4
+    assert [r.verse_id for r in outcome.results] == [
         "1_Corinthians_13:4",
         "1_Corinthians_13:5",
         "1_Corinthians_13:6",
@@ -187,27 +238,38 @@ def test_search_verse_reference_out_of_range_returns_empty():
 
     svc = get_search_service()
     svc.load_indices()
-    results, total, qtype, alpha = svc.search("John 3:999")
+    outcome = svc.search("John 3:999")
 
-    assert qtype == QueryType.VERSE_REFERENCE
-    assert alpha is None
-    assert total == 0
-    assert results == []
+    assert outcome.query_type == QueryType.VERSE_REFERENCE
+    assert outcome.alpha is None
+    assert outcome.total == 0
+    assert outcome.results == []
 
 
-def test_search_non_reference_still_falls_through():
+def test_search_non_reference_still_falls_through(stub_embedding):
     """Non-reference queries go through the normal classify + FAISS/BM25 flow."""
+    from app.services.search import get_search_service
+    from app.models.schemas import QueryType
+
+    stub_embedding("Ephesians_2:8")
+    svc = get_search_service()
+    svc.load_indices()
+
+    outcome = svc.search("grace")
+    assert outcome.query_type != QueryType.VERSE_REFERENCE
+    assert outcome.alpha is not None
+    assert outcome.total > 0
+
+
+def test_search_old_testament_reference_explains_empty_result():
     from app.services.search import get_search_service
     from app.models.schemas import QueryType
 
     svc = get_search_service()
     svc.load_indices()
-    # This query requires an OpenAI embedding call, so skip if no key set.
-    import os
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set; cannot run live search.")
+    outcome = svc.search("Genesis 1:1")
 
-    results, total, qtype, alpha = svc.search("grace")
-    assert qtype != QueryType.VERSE_REFERENCE
-    assert alpha is not None
-    assert total > 0
+    assert outcome.query_type == QueryType.VERSE_REFERENCE
+    assert outcome.total == 0
+    assert outcome.results == []
+    assert "Old Testament" in outcome.notice

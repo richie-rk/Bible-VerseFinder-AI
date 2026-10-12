@@ -1,4 +1,1 @@
-# VerseFinder API
-from .main import app
-
-__all__ = ["app"]
+"""Bible Verse Finder AI backend. The ASGI app lives in app.main:app."""

@@ -1,7 +1,19 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from ...core.config import settings
 from .base import LLMProvider, LLMResponse
+
+
+def _finish_reason(response: types.GenerateContentResponse) -> str:
+    if not response.candidates or response.candidates[0].finish_reason is None:
+        return "unknown"
+    reason = response.candidates[0].finish_reason
+    if reason == types.FinishReason.MAX_TOKENS:
+        return "length"
+    if reason == types.FinishReason.STOP:
+        return "stop"
+    return str(getattr(reason, "name", reason)).lower()
 
 
 class GeminiProvider(LLMProvider):
@@ -9,12 +21,20 @@ class GeminiProvider(LLMProvider):
     provider_name = "gemini"
 
     def __init__(self):
-        self._configured = False
+        self._client: genai.Client | None = None
 
-    def _configure(self):
-        if not self._configured and settings.gemini_api_key:
-            genai.configure(api_key=settings.gemini_api_key)
-            self._configured = True
+    def _get_client(self) -> genai.Client:
+        if self._client is None:
+            self._client = genai.Client(
+                api_key=settings.gemini_api_key,
+                http_options=types.HttpOptions(
+                    timeout=int(settings.llm_timeout_seconds * 1000),
+                    retry_options=types.HttpRetryOptions(
+                        attempts=settings.llm_max_retries + 1
+                    ),
+                ),
+            )
+        return self._client
 
     def is_available(self) -> bool:
         return bool(settings.gemini_api_key)
@@ -25,35 +45,33 @@ class GeminiProvider(LLMProvider):
         user_prompt: str,
         max_tokens: int = 500,
         temperature: float = 0.3,
-        response_format: dict | None = None,
+        json_output: bool = False,
     ) -> LLMResponse:
-        self._configure()
-
-        model = genai.GenerativeModel(
-            model_name=settings.gemini_summarization_model,
+        thinking = (
+            types.ThinkingConfig(thinking_level=settings.gemini_thinking_level)
+            if settings.gemini_thinking_level
+            else None
+        )
+        config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            generation_config=genai.GenerationConfig(
-                max_output_tokens=max_tokens,
-                temperature=temperature,
-            ),
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+            # JSON mode; without it Gemini tends to wrap JSON in ```json fences.
+            response_mime_type="application/json" if json_output else None,
+            thinking_config=thinking,
         )
 
-        # Add JSON instruction if response format requested
-        prompt = user_prompt
-        if response_format:
-            prompt += "\n\nRespond with valid JSON only."
-
-        response = await model.generate_content_async(prompt)
-
-        # Extract token count if available
-        tokens_used = 0
-        if hasattr(response, "usage_metadata"):
-            tokens_used = getattr(response.usage_metadata, "total_token_count", 0)
-
-        return LLMResponse(
-            content=response.text,
-            provider=self.provider_name,
+        response = await self._get_client().aio.models.generate_content(
             model=settings.gemini_summarization_model,
-            tokens_used=tokens_used,
-            finish_reason="stop",
+            contents=user_prompt,
+            config=config,
+        )
+
+        usage = response.usage_metadata
+        return LLMResponse(
+            content=response.text or "",
+            provider=self.provider_name,
+            model=response.model_version or settings.gemini_summarization_model,
+            tokens_used=(usage.total_token_count or 0) if usage else 0,
+            finish_reason=_finish_reason(response),
         )

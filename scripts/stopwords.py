@@ -48,7 +48,7 @@ BIBLICAL_STOPWORDS = [
 
     # Adverbs (noise)
     "very", "just", "also", "only", "so", "too", "quite", "rather",
-    "again", "once", "here", "there", "now", "then", "soon",
+    "again", "once", "here", "there", "now", "soon",
     "further", "furthermore", "moreover",
 
     # Narrative / transitional

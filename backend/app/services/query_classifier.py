@@ -41,11 +41,18 @@ _BOILERPLATE_GENERAL_STRENGTH = 0.3
 _SOFT_TOPIC_STRENGTH = 0.5
 
 
+# Quoted spans: straight or curly double quotes, or single quotes that open
+# and close at word boundaries. The boundary checks stop possessives and
+# contractions ("God's love for Jesus' disciples", "don't") from reading as
+# a quote, while "'Peter's denial'" still does.
+_QUOTED_PHRASE_PATTERN = re.compile(
+    r"[\"“](.+?)[\"”]"
+    r"|(?<!\w)['‘](.+?)['’](?!\w)"
+)
+
 _EXACT_PHRASE_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
-        r'"[^"]+?"',
-        r"'[^']+?'",
         r"\bi am\b.*\bi am\b",
         r"\bborn again\b",
         r"\bkingdom of (god|heaven)\b",
@@ -145,7 +152,19 @@ def _tokenize_content(text: str) -> list[str]:
     return [t for t in tokens if len(t) > 2 and t not in _STOPWORDS]
 
 
+def extract_quoted_phrases(query: str) -> list[str]:
+    """Phrases the user explicitly quoted, e.g. '"born again"' -> ["born again"]."""
+    phrases = []
+    for match in _QUOTED_PHRASE_PATTERN.finditer(query):
+        phrase = (match.group(1) or match.group(2) or "").strip()
+        if phrase:
+            phrases.append(phrase)
+    return phrases
+
+
 def _score_exact_phrase(query_lower: str) -> float:
+    if extract_quoted_phrases(query_lower):
+        return 1.0
     for pat in _EXACT_PHRASE_PATTERNS:
         if pat.search(query_lower):
             return 1.0

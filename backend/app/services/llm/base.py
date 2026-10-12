@@ -9,6 +9,8 @@ class LLMResponse:
     provider: str
     model: str
     tokens_used: int
+    # Normalized across providers: "stop" for a complete answer, "length"
+    # when max_tokens cut it off, otherwise the provider's own reason.
     finish_reason: str
 
 
@@ -23,7 +25,7 @@ class LLMProvider(ABC):
         user_prompt: str,
         max_tokens: int = 500,
         temperature: float = 0.3,
-        response_format: dict | None = None,
+        json_output: bool = False,
     ) -> LLMResponse:
         """
         Generate a response from the LLM.
@@ -33,12 +35,11 @@ class LLMProvider(ABC):
             user_prompt: User query with context
             max_tokens: Maximum tokens in response
             temperature: Creativity (0.0-1.0)
-            response_format: JSON schema for structured output (if supported)
+            json_output: Ask the provider for a JSON object (JSON mode) where supported
 
         Returns:
             LLMResponse with content and metadata
         """
-        pass
 
     @abstractmethod
     def is_available(self) -> bool:

@@ -1,20 +1,28 @@
 """
 LLM-based summarization of retrieved verses. Strictly grounded: the prompt
 forbids the model from adding facts beyond what's in the passed verses, and
-every claim must inline-cite its source verse_id.
+every claim must inline-cite its source verse_id. Citations of verses that
+weren't passed in are removed before the response goes out.
+
+Verse text always comes from the server's corpus (search results or ID
+lookups), never from the API caller, so cached summaries can't be poisoned.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
+import math
+import re
+import sqlite3
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from ..core.config import settings
 from ..core.vocabularies import CANONICAL_QUERIES
 from ..models.schemas import (
-    VerseResult,
-    VerseInput,
     SummarizationResponse,
     VerseCitation,
     ThematicConnection,
@@ -22,11 +30,55 @@ from ..models.schemas import (
     SummarizationDepth,
 )
 from .cache import SqliteCache
-from .llm import get_llm_with_fallback
-
-VerseType = VerseResult | VerseInput
+from .llm import LLMResponse, get_llm_with_fallback
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SourceVerse:
+    verse_id: str
+    book: str
+    text: str
+
+
+class LLMOutputError(RuntimeError):
+    """The provider answered, but not with anything usable as a summary."""
+
+
+# Verses retrieved when the caller doesn't pass any.
+DEPTH_TOP_K: dict[SummarizationDepth, int] = {
+    SummarizationDepth.QUICK: 7,
+    SummarizationDepth.BALANCED: 12,
+    SummarizationDepth.COMPREHENSIVE: 20,
+}
+
+# Output token caps. The JSON envelope is expensive (the citations list alone
+# is ~15 tokens per verse), and the old 300/500/800 caps routinely cut the
+# JSON off mid-object. The prompt, not the cap, keeps answers short.
+DEPTH_MAX_TOKENS: dict[SummarizationDepth, int] = {
+    SummarizationDepth.QUICK: 700,
+    SummarizationDepth.BALANCED: 1000,
+    SummarizationDepth.COMPREHENSIVE: 1500,
+}
+
+# Bump when the prompt or response handling changes so stale cached
+# summaries stop being served.
+_CACHE_KEY_VERSION = "2"
+
+_DEFAULT_CONFIDENCE = 0.5
+_PROSE_FALLBACK_CONFIDENCE = 0.3
+_RELEVANCE_VALUES = {"primary", "supporting", "contextual"}
+
+_CODE_FENCE = re.compile(r"^```[A-Za-z]*\s*(.*?)\s*```$", re.DOTALL)
+# Inline citation markers: [John_3:16], [1_John_4:8, 1_John_4:9], [Romans_8:28-30]
+_CITATION_MARKER = re.compile(r"(\s?)\[([^\[\]]{1,200})\]")
+_VERSE_ID_SHAPE = re.compile(r"(?:[1-3]_)?[A-Za-z]+_\d+:\d+(?:-\d+)?")
+
+
+def top_k_for_depth(depth: SummarizationDepth) -> int:
+    return DEPTH_TOP_K[depth]
+
 
 # SQLite-backed so canonical-query summaries survive restarts.
 _summary_cache_instance: SqliteCache | None = None
@@ -36,7 +88,7 @@ def _get_summary_cache() -> SqliteCache:
     global _summary_cache_instance
     if _summary_cache_instance is None:
         _summary_cache_instance = SqliteCache(
-            db_path=settings.vector_store_path / "cache.db",
+            db_path=settings.resolved_cache_db_path,
             table_name="summaries",
             ttl_seconds=settings.summary_cache_ttl_days * 24 * 3600,
             max_entries=settings.summary_cache_max_entries,
@@ -89,7 +141,7 @@ CITATION FORMAT EXAMPLES:
 
 
 def _get_cache_key(query: str, verse_ids: list[str], depth: str) -> str:
-    content = f"{query.lower().strip()}|{','.join(sorted(verse_ids))}|{depth}"
+    content = f"v{_CACHE_KEY_VERSION}|{query.lower().strip()}|{','.join(sorted(verse_ids))}|{depth}"
     return hashlib.sha256(content.encode()).hexdigest()[:32]
 
 
@@ -100,87 +152,191 @@ def _is_cacheable_query(query: str) -> bool:
 
 def _get_cached_summary(cache_key: str) -> SummarizationResponse | None:
     """Return the cached summary for this key, or None on miss / expiry."""
-    payload = _get_summary_cache().get(cache_key)
+    try:
+        payload = _get_summary_cache().get(cache_key)
+    except (sqlite3.Error, OSError) as e:
+        # The cache is an optimization; summarize without it.
+        logger.warning("Summary cache read failed: %s", e)
+        return None
     if payload is None:
         return None
     try:
         response = SummarizationResponse.model_validate_json(payload)
-    except Exception as e:
+    except ValueError as e:
         # Schema drifted since this row was cached — treat as miss and move on.
-        logger.warning(f"Summary cache row deserialization failed for {cache_key[:8]}: {e}")
-        _get_summary_cache().delete(cache_key)
+        logger.warning("Summary cache row deserialization failed for %s: %s", cache_key[:8], e)
+        try:
+            _get_summary_cache().delete(cache_key)
+        except (sqlite3.Error, OSError):
+            pass
         return None
-    logger.info(f"Cache hit for key {cache_key[:8]}...")
+    logger.info("Cache hit for key %s...", cache_key[:8])
     return response
 
 
 def _cache_summary(cache_key: str, response: SummarizationResponse) -> None:
-    _get_summary_cache().set(cache_key, response.model_dump_json().encode("utf-8"))
-    logger.info(f"Cached summary for key {cache_key[:8]}...")
+    try:
+        _get_summary_cache().set(cache_key, response.model_dump_json().encode("utf-8"))
+    except (sqlite3.Error, OSError) as e:
+        logger.warning("Summary cache write failed: %s", e)
+        return
+    logger.info("Cached summary for key %s...", cache_key[:8])
 
 
-def _format_verses_for_llm(verses: list[VerseType]) -> str:
+def _format_verses_for_llm(verses: Sequence[SourceVerse]) -> str:
     lines = []
     for verse in verses:
         lines.append(f"[{verse.verse_id}] ({verse.book}): {verse.text}")
     return "\n\n".join(lines)
 
 
-def _get_max_tokens(depth: SummarizationDepth) -> int:
-    return {
-        SummarizationDepth.QUICK: 300,
-        SummarizationDepth.BALANCED: 500,
-        SummarizationDepth.COMPREHENSIVE: 800,
-    }[depth]
-
-
-def _get_top_k(depth: SummarizationDepth) -> int:
-    return {
-        SummarizationDepth.QUICK: 7,
-        SummarizationDepth.BALANCED: 12,
-        SummarizationDepth.COMPREHENSIVE: 20,
-    }[depth]
-
-
-def _parse_llm_response(
-    content: str,
-    verses: list[VerseType],
-) -> dict[str, Any]:
-    """Parse and validate LLM JSON response."""
+def _extract_json_object(content: str) -> dict[str, Any] | None:
+    """The JSON object in an LLM reply, tolerating ```json fences and text
+    around it. None if there isn't a complete object (e.g. truncated)."""
+    text = content.strip()
+    fence = _CODE_FENCE.match(text)
+    if fence:
+        text = fence.group(1)
     try:
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse LLM response as JSON: {e}")
-        # Return minimal valid response
-        return {
-            "summary": content[:500] if content else "Failed to generate summary.",
-            "key_points": [],
-            "citations": [],
-            "thematic_connections": [],
-            "confidence": 0.3,
-        }
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        if start < 0:
+            return None
+        try:
+            data, _ = json.JSONDecoder().raw_decode(text, start)
+        except json.JSONDecodeError:
+            return None
+    return data if isinstance(data, dict) else None
 
-    # Build verse lookup for enriching citations
-    verse_lookup = {v.verse_id: v for v in verses}
 
-    # Enrich citations with full verse text
-    enriched_citations = []
-    for citation in data.get("citations", []):
-        verse_id = citation.get("verse_id", "")
-        if verse_id in verse_lookup:
-            enriched_citations.append({
-                "verse_id": verse_id,
-                "text": verse_lookup[verse_id].text,
-                "relevance": citation.get("relevance", "supporting"),
-            })
+def _as_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return ""
 
-    data["citations"] = enriched_citations
-    return data
+
+def _as_text_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [text for text in map(_as_text, value) if text]
+
+
+def _as_confidence(value: Any) -> float:
+    if isinstance(value, str):
+        value = value.strip().rstrip("%")
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_CONFIDENCE
+    if math.isnan(confidence) or math.isinf(confidence):
+        return _DEFAULT_CONFIDENCE
+    if 1.0 < confidence <= 100.0:
+        # Models sometimes answer in percent.
+        confidence /= 100.0
+    return min(max(confidence, 0.0), 1.0)
+
+
+def _strip_unknown_citations(text: str, known_ids: set[str]) -> str:
+    """Drop inline [verse_id] markers that cite verses the model wasn't
+    given. Bracketed text that isn't shaped like verse IDs is left alone."""
+
+    def replace(match: re.Match) -> str:
+        lead, inner = match.group(1), match.group(2)
+        ids = [part.strip() for part in re.split(r"[,;]", inner)]
+        if not all(_VERSE_ID_SHAPE.fullmatch(vid) for vid in ids):
+            return match.group(0)
+        kept = [vid for vid in ids if vid.split("-", 1)[0] in known_ids]
+        return f"{lead}[{', '.join(kept)}]" if kept else ""
+
+    return _CITATION_MARKER.sub(replace, text).strip()
+
+
+def _summary_fields(payload: dict[str, Any], verses: Sequence[SourceVerse]) -> dict[str, Any]:
+    """Coerce an LLM JSON payload into SummarizationResponse fields, keeping
+    only citations of verses that were actually supplied."""
+    by_id = {v.verse_id: v for v in verses}
+    known_ids = set(by_id)
+
+    citations = []
+    seen: set[str] = set()
+    raw_citations = payload.get("citations")
+    for item in raw_citations if isinstance(raw_citations, list) else []:
+        if isinstance(item, str):
+            item = {"verse_id": item}
+        if not isinstance(item, dict):
+            continue
+        verse_id = _as_text(item.get("verse_id"))
+        if verse_id not in by_id or verse_id in seen:
+            continue
+        seen.add(verse_id)
+        relevance = _as_text(item.get("relevance")).lower()
+        citations.append(VerseCitation(
+            verse_id=verse_id,
+            text=by_id[verse_id].text,
+            relevance=relevance if relevance in _RELEVANCE_VALUES else "supporting",
+        ))
+
+    connections = []
+    raw_connections = payload.get("thematic_connections")
+    for item in raw_connections if isinstance(raw_connections, list) else []:
+        if not isinstance(item, dict):
+            continue
+        connected = [vid for vid in _as_text_list(item.get("verses")) if vid in known_ids]
+        if not connected:
+            continue
+        connections.append(ThematicConnection(
+            theme=_as_text(item.get("theme")),
+            verses=list(dict.fromkeys(connected)),
+            explanation=_strip_unknown_citations(_as_text(item.get("explanation")), known_ids),
+        ))
+
+    return {
+        "summary": _strip_unknown_citations(_as_text(payload.get("summary")), known_ids),
+        "key_points": [
+            point for point in (
+                _strip_unknown_citations(p, known_ids) for p in _as_text_list(payload.get("key_points"))
+            ) if point
+        ],
+        "citations": citations,
+        "thematic_connections": connections,
+        "confidence": _as_confidence(payload.get("confidence", _DEFAULT_CONFIDENCE)),
+    }
+
+
+def _prose_fields(content: str, verses: Sequence[SourceVerse]) -> dict[str, Any] | None:
+    """Fields for a reply that ignored JSON mode and answered in plain prose.
+    None if the reply is empty or is broken JSON (which mustn't be shown)."""
+    text = content.strip()
+    if not text or text[0] in "{[" or text.startswith("```"):
+        return None
+    return {
+        "summary": _strip_unknown_citations(text[:2000], {v.verse_id for v in verses}),
+        "key_points": [],
+        "citations": [],
+        "thematic_connections": [],
+        "confidence": _PROSE_FALLBACK_CONFIDENCE,
+    }
+
+
+async def _generate(user_prompt: str, max_tokens: int, provider: str | None) -> LLMResponse:
+    return await get_llm_with_fallback(
+        system_prompt=SUMMARIZATION_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        max_tokens=max_tokens,
+        temperature=0.3,
+        json_output=True,
+        primary_provider=provider,
+    )
 
 
 async def summarize_verses(
     query: str,
-    verses: list[VerseType],
+    verses: Sequence[SourceVerse],
     depth: SummarizationDepth = SummarizationDepth.BALANCED,
     provider: str | None = None,
 ) -> SummarizationResponse:
@@ -189,93 +345,87 @@ async def summarize_verses(
 
     Args:
         query: User's search query
-        verses: Retrieved verses to summarize (VerseResult or VerseInput)
+        verses: Verses to summarize, with text from the server's corpus
         depth: Summarization depth (quick/balanced/comprehensive)
         provider: Preferred LLM provider (optional)
 
     Returns:
         SummarizationResponse with summary, citations, and connections
+
+    Raises:
+        LLMUnavailableError: no provider could be reached
+        LLMOutputError: the provider's reply couldn't be turned into a summary
     """
     start_time = time.perf_counter()
 
-    # Check cache for canonical queries
-    verse_ids = [v.verse_id for v in verses]
-    cache_key = _get_cache_key(query, verse_ids, depth.value)
+    cacheable = _is_cacheable_query(query)
+    cache_key = _get_cache_key(query, [v.verse_id for v in verses], depth.value)
 
-    if _is_cacheable_query(query):
-        cached = _get_cached_summary(cache_key)
-        if cached:
-            # Update timing for cached response
-            cached.timing.total_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            return cached
+    if cacheable:
+        cached = await asyncio.to_thread(_get_cached_summary, cache_key)
+        if cached is not None:
+            # The row may have been written for another casing of the query.
+            return cached.model_copy(update={
+                "query": query,
+                "timing": TimingInfo(
+                    search_ms=0,
+                    total_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                ),
+            })
 
-    # Format verses as context
-    context = _format_verses_for_llm(verses)
-
-    # Build user prompt
     user_prompt = f"""Query: {query}
 
 Retrieved Verses ({len(verses)} total):
 
-{context}
+{_format_verses_for_llm(verses)}
 
 Based ONLY on these verses, provide a summary answering the query. Follow the JSON format exactly."""
 
-    # Get max tokens for depth
-    max_tokens = _get_max_tokens(depth)
+    max_tokens = DEPTH_MAX_TOKENS[depth]
+    llm_response = await _generate(user_prompt, max_tokens, provider)
+    tokens_used = llm_response.tokens_used
+    payload = _extract_json_object(llm_response.content)
 
-    # Generate summary with fallback
-    llm_start = time.perf_counter()
-    llm_response = await get_llm_with_fallback(
-        system_prompt=SUMMARIZATION_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        max_tokens=max_tokens,
-        temperature=0.3,
-        response_format={"type": "json"},
-        primary_provider=provider,
-    )
-    llm_ms = (time.perf_counter() - llm_start) * 1000
+    if payload is None and llm_response.finish_reason == "length":
+        # Cut off mid-JSON: retry once with twice the budget, starting with
+        # the provider that just answered.
+        logger.info(
+            "LLM output truncated at %d tokens by %s; retrying with %d",
+            max_tokens, llm_response.provider, max_tokens * 2,
+        )
+        llm_response = await _generate(user_prompt, max_tokens * 2, llm_response.provider)
+        tokens_used += llm_response.tokens_used
+        payload = _extract_json_object(llm_response.content)
 
-    # Parse response
-    parsed = _parse_llm_response(llm_response.content, verses)
-
-    # Build response
-    total_ms = (time.perf_counter() - start_time) * 1000
+    if payload is not None:
+        fields = _summary_fields(payload, verses)
+        if not fields["summary"] and not fields["key_points"]:
+            raise LLMOutputError(f"{llm_response.provider} returned JSON without a summary")
+    else:
+        logger.warning("LLM response from %s was not a JSON object", llm_response.provider)
+        fields = _prose_fields(llm_response.content, verses)
+        if fields is None:
+            raise LLMOutputError(
+                f"{llm_response.provider} returned an incomplete or malformed JSON summary "
+                f"(finish_reason={llm_response.finish_reason})"
+            )
 
     response = SummarizationResponse(
         query=query,
-        summary=parsed.get("summary", ""),
-        key_points=parsed.get("key_points", []),
-        citations=[
-            VerseCitation(
-                verse_id=c["verse_id"],
-                text=c["text"],
-                relevance=c["relevance"],
-            )
-            for c in parsed.get("citations", [])
-        ],
-        thematic_connections=[
-            ThematicConnection(
-                theme=tc.get("theme", ""),
-                verses=tc.get("verses", []),
-                explanation=tc.get("explanation", ""),
-            )
-            for tc in parsed.get("thematic_connections", [])
-        ],
-        confidence=parsed.get("confidence", 0.5),
+        **fields,
         verses_analyzed=len(verses),
         llm_provider=llm_response.provider,
         llm_model=llm_response.model,
-        tokens_used=llm_response.tokens_used,
+        tokens_used=tokens_used,
         depth=depth,
         timing=TimingInfo(
             search_ms=0,  # Will be set by endpoint
-            total_ms=round(total_ms, 2),
+            total_ms=round((time.perf_counter() - start_time) * 1000, 2),
         ),
     )
 
-    # Cache if canonical query
-    if _is_cacheable_query(query):
-        _cache_summary(cache_key, response)
+    # Only well-formed JSON answers are worth keeping for a week.
+    if cacheable and payload is not None:
+        await asyncio.to_thread(_cache_summary, cache_key, response)
 
     return response

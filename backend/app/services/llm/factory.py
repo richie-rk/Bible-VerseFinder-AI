@@ -19,6 +19,12 @@ _providers: dict[str, type[LLMProvider]] = {
 _provider_instances: dict[str, LLMProvider] = {}
 
 
+class LLMUnavailableError(RuntimeError):
+    """Every provider in the fallback chain failed or has no API key. The
+    message lists provider names and exception types for the server log;
+    it is not meant for API clients."""
+
+
 def get_llm_provider(provider_name: str) -> LLMProvider:
     """
     Get an LLM provider instance by name.
@@ -43,15 +49,15 @@ def get_llm_provider(provider_name: str) -> LLMProvider:
 
 def get_available_providers() -> list[str]:
     """Get list of available (configured) providers."""
-    available = []
-    for name in _providers:
-        try:
-            provider = get_llm_provider(name)
-            if provider.is_available():
-                available.append(name)
-        except Exception:
-            pass
-    return available
+    return [name for name in _providers if get_llm_provider(name).is_available()]
+
+
+def _fallback_chain(primary_provider: str | None) -> list[str]:
+    chain = [primary_provider] if primary_provider else []
+    for provider_name in [settings.llm_provider, "openai", "gemini", "grok"]:
+        if provider_name not in chain:
+            chain.append(provider_name)
+    return chain
 
 
 async def get_llm_with_fallback(
@@ -59,69 +65,55 @@ async def get_llm_with_fallback(
     user_prompt: str,
     max_tokens: int = 500,
     temperature: float = 0.3,
-    response_format: dict | None = None,
+    json_output: bool = False,
     primary_provider: str | None = None,
 ) -> LLMResponse:
     """
     Generate LLM response with automatic fallback.
 
-    Fallback order: primary → openai → gemini → grok
+    Fallback order: primary → configured default → openai → gemini → grok
 
     Args:
         system_prompt: System instructions
         user_prompt: User query with context
         max_tokens: Maximum tokens
         temperature: Creativity level
-        response_format: JSON schema for structured output
+        json_output: Request JSON mode from the provider
         primary_provider: Preferred provider (optional)
 
     Returns:
         LLMResponse from first successful provider
 
     Raises:
-        RuntimeError: If all providers fail
+        LLMUnavailableError: If all providers fail or none is configured
     """
-    # Build fallback chain
-    fallback_chain = []
-
-    # Add primary provider first if specified
-    if primary_provider:
-        fallback_chain.append(primary_provider)
-
-    # Add default fallback order
-    default_order = [settings.llm_provider, "openai", "gemini", "grok"]
-    for provider_name in default_order:
-        if provider_name not in fallback_chain:
-            fallback_chain.append(provider_name)
-
     errors = []
 
-    for provider_name in fallback_chain:
+    for provider_name in _fallback_chain(primary_provider):
+        provider = get_llm_provider(provider_name)
+
+        if not provider.is_available():
+            logger.debug("Provider %s not available (no API key)", provider_name)
+            continue
+
+        logger.info("Attempting LLM generation with %s", provider_name)
         try:
-            provider = get_llm_provider(provider_name)
-
-            if not provider.is_available():
-                logger.debug(f"Provider {provider_name} not available (no API key)")
-                continue
-
-            logger.info(f"Attempting LLM generation with {provider_name}")
-
             response = await provider.generate(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                response_format=response_format,
+                json_output=json_output,
             )
-
-            logger.info(f"Successfully generated response with {provider_name}")
-            return response
-
+        # Any failure (network, auth, quota, SDK error) means "try the next one".
         except Exception as e:
-            error_msg = f"{provider_name}: {type(e).__name__}: {str(e)}"
-            errors.append(error_msg)
-            logger.warning(f"Provider {provider_name} failed: {e}")
+            errors.append(f"{provider_name}: {type(e).__name__}")
+            logger.warning("Provider %s failed: %s: %s", provider_name, type(e).__name__, e)
             continue
 
-    # All providers failed
-    raise RuntimeError(f"All LLM providers failed. Errors: {errors}")
+        logger.info("Generated response with %s", provider_name)
+        return response
+
+    if not errors:
+        raise LLMUnavailableError("No LLM provider is configured (set OPENAI_API_KEY, GEMINI_API_KEY or GROK_API_KEY)")
+    raise LLMUnavailableError(f"All LLM providers failed: {'; '.join(errors)}")

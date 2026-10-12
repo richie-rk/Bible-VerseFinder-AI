@@ -2,13 +2,18 @@
 Verse-reference parsing and lookup.
 
 Detects queries that name an exact verse or verse range ("John 3:16",
-"1 Cor 13:4-7", "Rom 8.28", "I John 4:8") and returns the matching verse
-IDs. `search.search()` uses this to skip FAISS + BM25 entirely when a query
-is really an exact lookup.
+"1 Cor 13:4-7", "Rom 8.28", "I John 4:8") and parses them into a
+ParsedReference. `search.search()` uses this to skip FAISS + BM25 entirely
+when a query is really an exact lookup. Also normalizes loosely written book
+names and verse IDs for the /verses and /chapters endpoints.
 
 Book-name matching is deliberately strict: only recognised aliases return a
 canonical book, so "Jesus 3:16" fails here and falls through to normal
 search rather than producing a wrong result.
+
+The corpus is New Testament only. Old Testament references are recognised
+separately (`old_testament_reference_book`) so search can say so instead of
+returning unrelated NT verses.
 """
 
 from dataclasses import dataclass
@@ -17,10 +22,19 @@ import re
 
 # Four groups: book (letters with optional 1/2/3 ordinal prefix), chapter,
 # verse start, verse end (optional). Accepts ":" or "." as separator and
-# "-" or en-dash for ranges.
+# "-" or en-dash for ranges. Numbers are capped at three digits (no book has
+# 1000 chapters or verses), which also keeps "John 1:1-99999999" from
+# expanding into a giant range and huge digit strings from reaching int().
 _VERSE_REF_PATTERN = re.compile(
-    r"^\s*((?:[123]\s*)?[A-Za-z]+)\s+(\d+)\s*[:.]\s*(\d+)(?:\s*[-\u2013]\s*(\d+))?\s*$",
+    r"^\s*((?:[123]\s*)?[A-Za-z]+)\s+(\d{1,3})\s*[:.]\s*(\d{1,3})(?:\s*[-\u2013]\s*(\d{1,3}))?\s*$",
 )
+
+# "John_3:16", "1_John_4:8", "1 John 4:8", "jn_3:16". Applied only to short
+# inputs (see canonical_verse_id) so the lazy book group can't backtrack
+# quadratically on long junk.
+_VERSE_ID_PATTERN = re.compile(r"^\s*(.+?)[\s_]+(\d{1,3})\s*[:.]\s*(\d{1,3})\s*$")
+_MAX_VERSE_ID_LENGTH = 64
+_MAX_BOOK_NAME_LENGTH = 40
 
 # Convert "I John" / "II Peter" / "III John" to digit form before matching.
 # Anchored to start-of-string so "I am the way" survives untouched.
@@ -71,6 +85,51 @@ _BOOK_ALIASES: dict[str, str] = {
 }
 
 
+# Old Testament books (not in the corpus). Only used to explain an empty
+# result, so a few ambiguous short forms are acceptable here.
+_OLD_TESTAMENT_ALIASES: dict[str, str] = {
+    "genesis": "Genesis", "gen": "Genesis", "gn": "Genesis",
+    "exodus": "Exodus", "exod": "Exodus", "exo": "Exodus", "ex": "Exodus",
+    "leviticus": "Leviticus", "lev": "Leviticus", "lv": "Leviticus",
+    "numbers": "Numbers", "num": "Numbers", "nm": "Numbers",
+    "deuteronomy": "Deuteronomy", "deut": "Deuteronomy", "dt": "Deuteronomy",
+    "joshua": "Joshua", "josh": "Joshua", "jos": "Joshua",
+    "judges": "Judges", "judg": "Judges", "jdg": "Judges",
+    "ruth": "Ruth", "rth": "Ruth",
+    "1samuel": "1 Samuel", "1sam": "1 Samuel", "1sa": "1 Samuel",
+    "2samuel": "2 Samuel", "2sam": "2 Samuel", "2sa": "2 Samuel",
+    "1kings": "1 Kings", "1kgs": "1 Kings", "1ki": "1 Kings",
+    "2kings": "2 Kings", "2kgs": "2 Kings", "2ki": "2 Kings",
+    "1chronicles": "1 Chronicles", "1chron": "1 Chronicles", "1chr": "1 Chronicles",
+    "2chronicles": "2 Chronicles", "2chron": "2 Chronicles", "2chr": "2 Chronicles",
+    "ezra": "Ezra", "ezr": "Ezra",
+    "nehemiah": "Nehemiah", "neh": "Nehemiah",
+    "esther": "Esther", "esth": "Esther", "est": "Esther",
+    "job": "Job",
+    "psalms": "Psalms", "psalm": "Psalms", "psa": "Psalms", "ps": "Psalms", "pss": "Psalms",
+    "proverbs": "Proverbs", "prov": "Proverbs", "prv": "Proverbs", "pr": "Proverbs",
+    "ecclesiastes": "Ecclesiastes", "eccl": "Ecclesiastes", "ecc": "Ecclesiastes",
+    "song": "Song of Solomon", "sos": "Song of Solomon",
+    "isaiah": "Isaiah", "isa": "Isaiah",
+    "jeremiah": "Jeremiah", "jer": "Jeremiah",
+    "lamentations": "Lamentations", "lam": "Lamentations",
+    "ezekiel": "Ezekiel", "ezek": "Ezekiel", "ezk": "Ezekiel",
+    "daniel": "Daniel", "dan": "Daniel", "dn": "Daniel",
+    "hosea": "Hosea", "hos": "Hosea",
+    "joel": "Joel", "jl": "Joel",
+    "amos": "Amos",
+    "obadiah": "Obadiah", "obad": "Obadiah", "ob": "Obadiah",
+    "jonah": "Jonah", "jon": "Jonah", "jnh": "Jonah",
+    "micah": "Micah", "mic": "Micah",
+    "nahum": "Nahum", "nah": "Nahum",
+    "habakkuk": "Habakkuk", "hab": "Habakkuk",
+    "zephaniah": "Zephaniah", "zeph": "Zephaniah", "zep": "Zephaniah",
+    "haggai": "Haggai", "hag": "Haggai",
+    "zechariah": "Zechariah", "zech": "Zechariah", "zec": "Zechariah",
+    "malachi": "Malachi", "mal": "Malachi",
+}
+
+
 @dataclass(frozen=True)
 class ParsedReference:
     book: str
@@ -87,9 +146,51 @@ def _preprocess(query: str) -> str:
     return q
 
 
+def _book_key(raw: str) -> str:
+    return re.sub(r"\s+", "", raw).lower()
+
+
 def _normalize_book(raw: str) -> str | None:
-    key = re.sub(r"\s+", "", raw).lower()
-    return _BOOK_ALIASES.get(key)
+    return _BOOK_ALIASES.get(_book_key(raw))
+
+
+def normalize_book(raw: str) -> str | None:
+    """Map a user-supplied NT book name or abbreviation to its canonical name.
+
+    Accepts any case, underscores for spaces and Roman-numeral ordinals:
+    "john", "1_John", "1 jn" and "I John" all resolve. Returns None for
+    unknown books.
+    """
+    if not raw or len(raw) > _MAX_BOOK_NAME_LENGTH:
+        return None
+    return _normalize_book(_preprocess(raw.replace("_", " ")))
+
+
+def canonical_verse_id(raw: str) -> str | None:
+    """Rewrite a loosely formatted verse ID ("john_3:16", "1 Jn 4:8") into
+    the corpus form ("John_3:16", "1_John_4:8"). Returns None if it doesn't
+    parse or names an unknown book."""
+    if not raw or len(raw) > _MAX_VERSE_ID_LENGTH:
+        return None
+    match = _VERSE_ID_PATTERN.match(raw)
+    if match is None:
+        return None
+    raw_book, chapter_s, verse_s = match.groups()
+    book = normalize_book(raw_book)
+    if book is None:
+        return None
+    return f"{book.replace(' ', '_')}_{int(chapter_s)}:{int(verse_s)}"
+
+
+def old_testament_reference_book(query: str) -> str | None:
+    """Canonical book name if `query` is a verse reference into the Old
+    Testament ("Genesis 1:1", "Ps 23:1"), else None."""
+    if not query or not query.strip():
+        return None
+    match = _VERSE_REF_PATTERN.match(_preprocess(query))
+    if match is None:
+        return None
+    return _OLD_TESTAMENT_ALIASES.get(_book_key(match.group(1)))
 
 
 def parse_verse_reference(query: str) -> ParsedReference | None:
@@ -120,11 +221,3 @@ def parse_verse_reference(query: str) -> ParsedReference | None:
         verse_start=verse_start,
         verse_end=verse_end,
     )
-
-
-def verse_ids_for(ref: ParsedReference) -> list[str]:
-    book_id = ref.book.replace(" ", "_")
-    return [
-        f"{book_id}_{ref.chapter}:{v}"
-        for v in range(ref.verse_start, ref.verse_end + 1)
-    ]

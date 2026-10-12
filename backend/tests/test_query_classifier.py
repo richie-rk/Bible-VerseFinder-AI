@@ -12,7 +12,7 @@ the baseline-anchored blend, which pulls alpha a bit toward alpha_default.
 import pytest
 
 from app.models.schemas import QueryType
-from app.services.query_classifier import classify_query
+from app.services.query_classifier import classify_query, extract_quoted_phrases
 
 
 # (query, acceptable_dominant_types, (alpha_min, alpha_max))
@@ -112,3 +112,50 @@ def test_alpha_always_in_reasonable_range():
         assert 0.20 <= alpha <= 0.75, (
             f"Query {q!r}: alpha {alpha:.3f} outside sanity band [0.20, 0.75]"
         )
+
+
+# ---------- Quotes vs apostrophes ----------
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "God's love for Jesus' disciples",
+        "don't worry, God's got it",
+        "Paul's letter to the church's elders",
+        "God’s love for the disciples’ faith",   # curly apostrophes
+    ],
+)
+def test_possessives_and_contractions_are_not_exact_phrases(query):
+    qtype, _ = classify_query(query)
+    assert qtype != QueryType.EXACT_PHRASE
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        '"faith of a mustard seed"',
+        "“faith of a mustard seed”",   # curly double quotes
+        "'faith of a mustard seed'",
+        "‘faith of a mustard seed’",   # curly single quotes
+    ],
+)
+def test_quoted_text_is_an_exact_phrase(query):
+    qtype, _ = classify_query(query)
+    assert qtype == QueryType.EXACT_PHRASE
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ('"born again"', ["born again"]),
+        ("“born again”", ["born again"]),
+        ("'Peter's denial'", ["Peter's denial"]),
+        ("Jesus' 'living water'", ["living water"]),
+        ("'grace' and 'mercy'", ["grace", "mercy"]),
+        ("God's love for Jesus' disciples", []),
+        ('unbalanced "quote', []),
+        ('""', []),
+    ],
+)
+def test_extract_quoted_phrases(query, expected):
+    assert extract_quoted_phrases(query) == expected

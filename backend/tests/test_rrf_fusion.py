@@ -212,23 +212,18 @@ def test_scoring_info_preserved():
 
 # ---------- search() non-hybrid alpha behavior ----------
 
-def test_search_semantic_mode_returns_alpha_none():
+def test_search_semantic_mode_returns_alpha_none(stub_embedding):
     """
     In SEMANTIC mode, alpha has no blending meaning. search() must return None
     so the UI doesn't show a fake "α: 1.0" chip.
-    Skipped if no OPENAI_API_KEY available.
     """
-    import os
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set; cannot run live semantic search.")
-
     from app.services.search import get_search_service
     from app.models.schemas import SearchMode
 
+    stub_embedding("Ephesians_2:8")
     svc = get_search_service()
     svc.load_indices()
-    _, _, _, alpha = svc.search("grace", mode=SearchMode.SEMANTIC)
-    assert alpha is None
+    assert svc.search("grace", mode=SearchMode.SEMANTIC).alpha is None
 
 
 def test_search_keyword_mode_returns_alpha_none():
@@ -238,22 +233,18 @@ def test_search_keyword_mode_returns_alpha_none():
 
     svc = get_search_service()
     svc.load_indices()
-    _, _, _, alpha = svc.search("grace", mode=SearchMode.KEYWORD)
-    assert alpha is None
+    assert svc.search("grace", mode=SearchMode.KEYWORD).alpha is None
 
 
-def test_search_hybrid_mode_still_returns_numeric_alpha():
+def test_search_hybrid_mode_still_returns_numeric_alpha(stub_embedding):
     """HYBRID mode must still return the blended alpha from the classifier."""
-    import os
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set; cannot run live hybrid search.")
-
     from app.services.search import get_search_service
     from app.models.schemas import SearchMode
 
+    stub_embedding("Ephesians_2:8")
     svc = get_search_service()
     svc.load_indices()
-    _, _, _, alpha = svc.search("grace", mode=SearchMode.HYBRID)
+    alpha = svc.search("grace", mode=SearchMode.HYBRID).alpha
     assert isinstance(alpha, float)
     assert 0.0 < alpha < 1.0
 
