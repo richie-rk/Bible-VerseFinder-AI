@@ -96,7 +96,7 @@ Then open `http://localhost:8080` in your browser.
 
 ## Scripts (Index Rebuilding - Optional)
 
-These are only needed if you want to rebuild the search indices from scratch. The pre-built indices are already included in `backend/vector_store/`.
+These are only needed if you want to rebuild the search indices from scratch. The pre-built indices are already included in `backend/vector_store/`, and the scripts write their output there directly.
 
 ```bash
 cd scripts
@@ -118,5 +118,6 @@ uv run python create_bm25_index.py
 | `GEMINI_API_KEY` | No       | —        | Google Gemini API key       |
 | `GROK_API_KEY`   | No       | —        | Grok API key                |
 | `LLM_PROVIDER`   | No       | `openai` | Which LLM to use (openai/gemini/grok) |
+| `CORS_ORIGINS`   | No       | `http://localhost:8080,...` | Comma-separated browser origins allowed to call the API |
 
-*Search works without API keys. Keys are needed for the AI summarization feature.
+*Keyword search and verse lookups work without API keys. Without `OPENAI_API_KEY`, hybrid search falls back to keyword matches and semantic mode is unavailable. Keys are needed for the AI summarization feature. See the README's Configuration section for every setting.

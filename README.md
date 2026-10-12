@@ -29,9 +29,11 @@ Each query is classified by a weighted blend of feature signals (named entity, e
 
 - Hybrid retrieval: FAISS semantic search and BM25 keyword search, fused via canonical Reciprocal Rank Fusion
 - Signal-blending query classification: a weighted blend over exact phrase, named entity, single or multi-concept, general topic, and comparative signals, producing a continuous RRF weight rather than forcing each query into one bucket
-- Verse-reference short-circuit: `John 3:16`, `1 Cor 13:4-7`, `Rom 8.28` skip FAISS and BM25 and return the exact verse directly, with no embedding call, in about 5ms
+- Verse-reference short-circuit: `John 3:16`, `1 Cor 13:4-7`, `Rom 8.28` skip FAISS and BM25 and return the exact verse directly, with no embedding call, in about 5ms. Old Testament references get a clear "not indexed" notice instead of unrelated results
+- Exact phrases: wrapping words in quotes (`"born again"`) restricts results to verses containing that wording
+- Graceful degradation: if OpenAI embeddings are unavailable, hybrid search falls back to keyword matches and says so
 - Support for more than one LLM: OpenAI (GPT-4o-mini), Google Gemini, and Grok (xAI), with automatic fallback for summarization
-- AI summarization with citations: every claim carries an inline `[verse_id]` citation grounded in the retrieved verses
+- AI summarization with citations: every claim carries an inline `[verse_id]` citation grounded in the retrieved verses; citations of verses the model wasn't given are removed
 - Adjustable analysis depth: Quick (7 verses), Balanced (12 verses), or Comprehensive (20 verses)
 - Full chapter reading with verse highlighting
 - Adaptive thresholds: FAISS cosine threshold, dynamic BM25 cutoff relative to the top hit, and an RRF threshold on a normalized 0 to 1 scale
@@ -123,9 +125,9 @@ rrf = alpha       * 1/(faiss_rank + k)   if doc in FAISS, else 0
 
 The score is normalized to [0, 1] before the RRF threshold is applied. A signal-blending classifier takes the weighted mean of per-signal target alphas, anchored by a baseline at `alpha_default`, and reports the dominant signal for observability while retrieval uses the blended alpha. The continuous alpha lands roughly in [0.22, 0.75]: exact-phrase-heavy queries pull toward keyword, general-topic queries pull toward semantic, and mixed queries sit in between. Adaptive thresholds cover the FAISS cosine minimum (0.20 default), a dynamic BM25 cutoff (`max(bm25_min_score, top * bm25_relative_threshold)`) to handle term-rarity scale, and a normalized RRF minimum (0.15 default). The verse-reference short-circuit parses `Book Chapter:Verse` (with common abbreviations and ranges), bypasses FAISS and BM25, and returns via an O(1) lookup.
 
-**LLM integration.** OpenAI GPT-4o-mini is the default summarizer, with Google Gemini (1.5 Flash) and Grok (xAI) as alternatives. Fallback runs primary, then OpenAI, then Gemini, then Grok, then an error.
+**LLM integration.** OpenAI GPT-4o-mini is the default summarizer, with Google Gemini (the current Flash model, via Google's `gemini-flash-latest` alias) and Grok (xAI, `grok-4.20-non-reasoning`) as alternatives. Fallback runs the requested provider, then the configured default, then OpenAI, then Gemini, then Grok, then an error. Verse text sent to the model always comes from the server's own corpus, never from the API caller.
 
-**API and interface.** A FastAPI backend serves the endpoints with a health check, Swagger docs, and CORS support. The frontend is React and TypeScript (Vite, shadcn/ui, TailwindCSS, Zustand, TanStack Query). SQLite-backed caches at `backend/vector_store/cache.db` hold the embedding cache (90-day TTL by default, or disabled) and the summary cache (7-day TTL), both size-cappable for constrained deployments. Verse and chapter lookups (`/verses/{id}`, `/chapters/{book}/{chapter}`) use pre-built dicts rather than linear scans.
+**API and interface.** A FastAPI backend serves the endpoints with a health check, Swagger docs, CORS limited to configured origins, and per-IP rate limits on the endpoints that cost money (`/search`, `/summarize`). The frontend is React and TypeScript (Vite, shadcn/ui, TailwindCSS, Zustand, TanStack Query). SQLite-backed caches at `backend/vector_store/cache.db` hold the embedding cache (90-day TTL by default, or disabled) and the summary cache (7-day TTL), both capped by LRU size limits. Verse and chapter lookups (`/verses/{id}`, `/chapters/{book}/{chapter}`) use pre-built dicts rather than linear scans.
 
 ## Installation
 
@@ -169,7 +171,7 @@ OPENAI_API_KEY=sk-your-openai-api-key
 # LLM_PROVIDER=openai
 ```
 
-The FAISS and BM25 indices are pre-built and included in `backend/vector_store/`, so there's no extra data setup. `OPENAI_API_KEY` is required for semantic and hybrid search (the query is embedded at call time). Pure keyword search (`mode=keyword`) and verse-reference lookups (`John 3:16`) work with no API key at all. Summarization needs a key for whichever provider is active.
+The FAISS and BM25 indices are pre-built and included in `backend/vector_store/`, so there's no extra data setup. `OPENAI_API_KEY` is required for semantic and hybrid search (the query is embedded at call time). Pure keyword search (`mode=keyword`) and verse-reference lookups (`John 3:16`) work with no API key at all; without a key, hybrid search falls back to keyword matches and semantic mode returns 503. Summarization needs a key for whichever provider is active.
 
 ## Usage
 
@@ -197,8 +199,8 @@ Then open:
 
 - `GET /search` searches for verses (semantic, keyword, or hybrid)
 - `POST /summarize` generates an AI summary with citations from the results
-- `GET /verses/{verse_id}` gets a verse by ID (for example `John_3:16`)
-- `GET /chapters/{book}/{chapter}` gets all verses from a chapter
+- `GET /verses/{verse_id}` gets a verse by ID (for example `John_3:16`; case and abbreviations like `jn_3:16` are accepted)
+- `GET /chapters/{book}/{chapter}` gets all verses from a chapter, plus the book's chapter count (book names are case-insensitive and accept abbreviations)
 - `GET /providers` lists available LLM providers
 - `GET /health` checks system status, index state, and verse count
 
@@ -215,8 +217,21 @@ LLM_PROVIDER=openai                     # Default provider: openai | gemini | gr
 
 # Models
 OPENAI_SUMMARIZATION_MODEL=gpt-4o-mini
-GEMINI_SUMMARIZATION_MODEL=gemini-1.5-flash
-GROK_SUMMARIZATION_MODEL=grok-beta
+GEMINI_SUMMARIZATION_MODEL=gemini-flash-latest   # Alias for the current Flash model; pin a version for reproducibility
+GEMINI_THINKING_LEVEL=low               # Gemini 3 thinking level; set empty for models without thinking levels
+GROK_SUMMARIZATION_MODEL=grok-4.20-non-reasoning
+
+# Timeouts and retries
+OPENAI_TIMEOUT_SECONDS=15               # Embedding calls (on the search path)
+OPENAI_MAX_RETRIES=2
+LLM_TIMEOUT_SECONDS=60                  # Summarization calls, per provider
+LLM_MAX_RETRIES=1
+
+# API protection
+CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080   # Comma-separated browser origins allowed to call the API
+RATE_LIMIT_SEARCH_PER_MINUTE=120        # Per client IP; 0 disables
+RATE_LIMIT_SUMMARIZE_PER_MINUTE=10      # Per client IP; 0 disables
+MAX_QUERY_LENGTH=500
 
 # Retrieval
 SEARCH_K=200                            # Candidates per retriever before RRF fusion
@@ -228,11 +243,14 @@ BM25_RELATIVE_THRESHOLD=0.05            # Keep BM25 results >= 5% of top score
 RRF_THRESHOLD=0.15                      # Normalized [0-1] RRF minimum
 RRF_K=60                                # RRF smoothing constant
 
-# Caching (SQLite, backend/vector_store/cache.db)
+# Caching (SQLite, backend/vector_store/cache.db unless CACHE_DB_PATH is set)
 EMBEDDING_CACHE_TTL_DAYS=90             # 0 = never expire
-EMBEDDING_CACHE_MAX_ENTRIES=0           # 0 = no LRU cap
+EMBEDDING_CACHE_MAX_ENTRIES=10000       # LRU cap (~6 KB per entry); 0 = no cap
 SUMMARY_CACHE_TTL_DAYS=7
-SUMMARY_CACHE_MAX_ENTRIES=0
+SUMMARY_CACHE_MAX_ENTRIES=1000
+
+# Logging
+LOG_LEVEL=INFO
 
 # Pagination
 DEFAULT_PAGE_SIZE=50
@@ -249,6 +267,8 @@ ALPHA_DEFAULT=0.50                      # Baseline anchor when no strong signal 
 ```
 
 Mixed queries like "What does Jesus say about grace?" fire several signals at once, so the final alpha is a weighted blend of these targets rather than any single one.
+
+Rate limits are kept in memory per worker process. Behind a reverse proxy, start uvicorn with `--proxy-headers` (and `--forwarded-allow-ips`) so limits apply to the real client IP rather than the proxy.
 
 ### Frontend scripts
 
@@ -269,7 +289,7 @@ uv run pytest                            # Tests
 
 ### Rebuild search indices (optional)
 
-The indices are pre-built in `backend/vector_store/`. Only run these if you need to regenerate them:
+The indices are pre-built in `backend/vector_store/`. Only run these if you need to regenerate them. Both scripts write straight into `backend/vector_store/`; the FAISS script stops without writing anything if any batch fails to embed, and the API refuses to load indices whose verse counts don't match.
 
 ```bash
 cd scripts
