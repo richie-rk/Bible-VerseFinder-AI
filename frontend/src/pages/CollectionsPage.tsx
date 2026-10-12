@@ -129,8 +129,10 @@ function CollectionCard({ collection, onDelete }: { collection: Collection; onDe
         {ICON_MAP[collection.icon] || <Folder className="w-5 h-5 text-gold" />}
         <h3 className="font-serif font-semibold">{collection.name}</h3>
         <button
+          type="button"
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="ml-auto p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 transition-all"
+          aria-label={`Delete collection ${collection.name}`}
+          className="ml-auto p-1 rounded md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 hover:bg-destructive/10 transition-all"
         >
           <Trash2 className="w-3.5 h-3.5 text-destructive" />
         </button>

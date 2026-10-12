@@ -2,27 +2,44 @@ import { create } from "zustand";
 
 interface UIState {
   darkMode: boolean;
-  sidebarOpen: boolean;
 
   setDarkMode: (dark: boolean) => void;
   toggleDarkMode: () => void;
-  setSidebarOpen: (open: boolean) => void;
-  toggleSidebar: () => void;
+}
+
+const THEME_STORAGE_KEY = "theme";
+
+// Storage access can throw (e.g. blocked site data), so it must never break app start-up.
+function readStoredTheme(): string | null {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeTheme(dark: boolean): void {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, dark ? "dark" : "light");
+  } catch {
+    // Ignore storage errors; the theme still applies for this session.
+  }
 }
 
 const getInitialDarkMode = (): boolean => {
   if (typeof window === "undefined") return false;
-  const stored = localStorage.getItem("theme");
-  if (stored) return stored === "dark";
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const stored = readStoredTheme();
+  if (stored === "dark" || stored === "light") return stored === "dark";
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 };
 
+const initialDarkMode = getInitialDarkMode();
+
 export const useUIStore = create<UIState>((set, get) => ({
-  darkMode: getInitialDarkMode(),
-  sidebarOpen: true,
+  darkMode: initialDarkMode,
 
   setDarkMode: (dark) => {
-    localStorage.setItem("theme", dark ? "dark" : "light");
+    storeTheme(dark);
     document.documentElement.classList.toggle("dark", dark);
     set({ darkMode: dark });
   },
@@ -30,13 +47,9 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleDarkMode: () => {
     get().setDarkMode(!get().darkMode);
   },
-
-  setSidebarOpen: (open) => set({ sidebarOpen: open }),
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 }));
 
 // Initialize dark mode class on load
-if (typeof window !== "undefined") {
-  const dark = getInitialDarkMode();
-  document.documentElement.classList.toggle("dark", dark);
+if (typeof document !== "undefined") {
+  document.documentElement.classList.toggle("dark", initialDarkMode);
 }

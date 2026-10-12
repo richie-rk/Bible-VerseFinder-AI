@@ -1,9 +1,9 @@
 // VerseFinder AI API Types
-// These types match the backend Pydantic models
+// These types mirror the backend Pydantic models (backend/app/models/schemas.py)
 
 export type SearchMode = "semantic" | "keyword" | "hybrid";
 export type AnalysisDepth = "quick" | "balanced" | "comprehensive";
-export type ActiveView = "explore" | "summarize";
+export type LlmProvider = "openai" | "gemini" | "grok";
 export type RelevanceType = "primary" | "supporting" | "contextual";
 export type QueryType =
   | "named_entity"
@@ -59,6 +59,8 @@ export interface SearchResponse {
   thresholds_applied: ThresholdsApplied;
   pagination: Pagination;
   results: VerseResult[];
+  /** User-facing message to show above the results (e.g. a search fallback was used). */
+  notice?: string | null;
 }
 
 // Summarization Response Types (matches backend SummarizationResponse)
@@ -97,60 +99,35 @@ export interface ChapterVerse {
 }
 
 export interface ChapterResponse {
+  /** Canonical book name, e.g. "1 John". */
   book: string;
   chapter: number;
+  /** Number of chapters in the book. */
+  total_chapters: number;
   total_verses: number;
   verses: ChapterVerse[];
 }
 
-// Health Response (matches backend HealthResponse)
-export interface HealthResponse {
-  status: string;
-  version: string;
-  indices_loaded: boolean;
-  total_verses: number;
-}
-
-// App State Types
-export interface ChapterModalState {
-  open: boolean;
-  book: string;
-  chapter: number;
-  highlightVerse: string;
-}
-
-export interface AppState {
-  searchQuery: string;
-  searchMode: SearchMode;
-  activeView: ActiveView;
-  depth: AnalysisDepth;
-  searchResults: SearchResponse | null;
-  summarizeResults: SummarizationResponse | null;
-  isSearching: boolean;
-  isSummarizing: boolean;
-  error: string | null;
-  chapterModal: ChapterModalState | null;
-  darkMode: boolean;
-}
-
-// Favorite and History Types
+// Search history (persisted client-side)
 export interface SearchHistoryItem {
   query: string;
   timestamp: number;
 }
 
-// API Request Types
+// API Request Types (matches backend SummarizeRequest)
+export interface SummarizeVerseInput {
+  verse_id: string;
+  /** Optional and ignored by the backend, which looks the verse text up by ID. */
+  book?: string;
+  text?: string;
+}
+
 export interface SummarizeRequest {
   query: string;
-  verses?: VerseInput[];
+  /** Pre-retrieved verses (max 30). When omitted, the backend runs its own search. */
+  verses?: SummarizeVerseInput[];
   mode?: SearchMode;
   depth?: AnalysisDepth;
   top_k?: number;
-  provider?: string;
-}
-
-export interface VerseInput {
-  verse_id: string;
-  book: string;
-  text: string;
+  provider?: LlmProvider | null;
 }

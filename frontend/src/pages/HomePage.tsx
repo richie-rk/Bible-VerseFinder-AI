@@ -8,10 +8,11 @@ const TOPIC_PILLS = [
   "hope", "faith", "wisdom", "prayer",
 ];
 
+// Text from the app's corpus, the World English Bible (WEB)
 const VERSE_OF_THE_DAY = {
-  text: "And we know that in all things God works for the good of those who love him, who have been called according to his purpose.",
+  text: "We know that all things work together for good for those who love God, to those who are called according to his purpose.",
   reference: "Romans 8:28",
-  translation: "ESV",
+  translation: "WEB",
 };
 
 export default function HomePage() {

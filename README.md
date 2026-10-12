@@ -274,7 +274,8 @@ Rate limits are kept in memory per worker process. Behind a reverse proxy, start
 
 ```bash
 npm run dev          # Dev server (port 8080)
-npm run build        # Production build
+npm run typecheck    # TypeScript (strict) type check
+npm run build        # Type check, then production build
 npm run preview      # Preview the production build
 npm run lint         # ESLint
 npm run test         # Vitest

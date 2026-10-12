@@ -1,7 +1,7 @@
-import { Sun, Moon, Monitor } from "lucide-react";
+import { Sun, Moon } from "lucide-react";
 import { useUIStore } from "@/stores/useUIStore";
 import { useSearchStore } from "@/stores/useSearchStore";
-import type { SearchMode, AnalysisDepth } from "@/types/api";
+import { DEPTH_VERSE_COUNT, SEARCH_MODES, SUMMARY_DEPTHS } from "@/lib/search";
 
 export default function SettingsPage() {
   const { darkMode, setDarkMode } = useUIStore();
@@ -44,15 +44,16 @@ export default function SettingsPage() {
           Default Search Mode
         </h2>
         <div className="flex gap-2">
-          {(["semantic", "keyword", "hybrid"] as SearchMode[]).map((mode) => (
+          {SEARCH_MODES.map(({ value, label }) => (
             <button
-              key={mode}
-              onClick={() => setSearchMode(mode)}
-              className={`pill-button capitalize ${
-                searchMode === mode ? "pill-button-active" : "pill-button-inactive"
+              key={value}
+              onClick={() => setSearchMode(value)}
+              aria-pressed={searchMode === value}
+              className={`pill-button ${
+                searchMode === value ? "pill-button-active" : "pill-button-inactive"
               }`}
             >
-              {mode}
+              {label}
             </button>
           ))}
         </div>
@@ -60,19 +61,23 @@ export default function SettingsPage() {
 
       {/* Depth defaults */}
       <section className="mb-8">
-        <h2 className="font-sans font-semibold text-sm uppercase tracking-wider text-muted-foreground mb-4">
-          Default Search Depth
+        <h2 className="font-sans font-semibold text-sm uppercase tracking-wider text-muted-foreground mb-1">
+          Default Summary Depth
         </h2>
-        <div className="flex gap-2">
-          {(["quick", "balanced", "comprehensive"] as AnalysisDepth[]).map((d) => (
+        <p className="text-sm text-muted-foreground mb-4">
+          How many top verses an AI summary analyzes. It doesn&rsquo;t change search results.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {SUMMARY_DEPTHS.map(({ value, label }) => (
             <button
-              key={d}
-              onClick={() => setDepth(d)}
-              className={`pill-button capitalize ${
-                depth === d ? "pill-button-active" : "pill-button-inactive"
+              key={value}
+              onClick={() => setDepth(value)}
+              aria-pressed={depth === value}
+              className={`pill-button ${
+                depth === value ? "pill-button-active" : "pill-button-inactive"
               }`}
             >
-              {d}
+              {label} &middot; {DEPTH_VERSE_COUNT[value]} verses
             </button>
           ))}
         </div>

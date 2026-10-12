@@ -7,7 +7,7 @@
 | Python     | 3.13+    | Required for backend         |
 | uv         | latest   | Python package manager       |
 | Node.js    | 18+      | Required for frontend        |
-| npm or bun | latest   | Either works for frontend    |
+| npm        | latest   | Frontend package manager (package-lock.json is the lockfile) |
 
 ---
 
@@ -53,13 +53,9 @@ cd frontend
 
 # Install dependencies
 npm install
-# OR
-bun install
 
 # Start the dev server
 npm run dev
-# OR
-bun run dev
 ```
 
 ### Frontend Scripts
@@ -67,7 +63,8 @@ bun run dev
 | Command            | Description                |
 |--------------------|----------------------------|
 | `npm run dev`      | Start dev server (port 8080) |
-| `npm run build`    | Production build to dist/  |
+| `npm run typecheck` | Type-check the app and config files |
+| `npm run build`    | Type-check, then production build to dist/ |
 | `npm run lint`     | Run ESLint                 |
 | `npm run test`     | Run tests (Vitest)         |
 | `npm run test:watch` | Run tests in watch mode  |

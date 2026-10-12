@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Heart, Copy, Share2, Check } from "lucide-react";
 import type { VerseResult } from "@/types/api";
-import { useFavorites } from "@/hooks/useFavorites";
+import { useCollectionsStore } from "@/stores/useCollectionsStore";
 import { useToast } from "@/hooks/use-toast";
 import {
   Tooltip,
@@ -18,17 +18,17 @@ interface VerseCardProps {
 
 export function VerseCard({ verse, onClick, showRank = true }: VerseCardProps) {
   const [copied, setCopied] = useState(false);
-  const { isFavorite, toggleFavorite } = useFavorites();
+  const favorite = useCollectionsStore((state) => state.favorites.includes(verse.verse_id));
+  const toggleFavorite = useCollectionsStore((state) => state.toggleFavorite);
   const { toast } = useToast();
-  const favorite = isFavorite(verse.verse_id);
 
-  // Parse chapter and verse from verse_id
-  const { chapter, verse: verseNum } = useMemo(
-    () => parseVerseId(verse.verse_id),
-    [verse.verse_id]
-  );
-
-  const reference = `${verse.book} ${chapter}:${verseNum}`;
+  // Human-readable reference, e.g. "1 John 4:8"
+  const reference = useMemo(() => {
+    const parsed = parseVerseId(verse.verse_id);
+    return parsed
+      ? `${verse.book} ${parsed.chapter}:${parsed.verse}`
+      : verse.verse_id.replace(/_/g, " ");
+  }, [verse.book, verse.verse_id]);
   const scorePercent = Math.min(100, Math.round(verse.score * 100));
 
   const handleCopy = async (e: React.MouseEvent) => {
@@ -82,7 +82,14 @@ export function VerseCard({ verse, onClick, showRank = true }: VerseCardProps) {
     <article
       className="verse-card group"
       onClick={onClick}
-      onKeyDown={(e) => e.key === "Enter" && onClick()}
+      onKeyDown={(e) => {
+        // Ignore keys pressed on the action buttons inside the card.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       tabIndex={0}
       role="button"
       aria-label={`${reference}: ${verse.text.slice(0, 50)}...`}
@@ -130,7 +137,7 @@ export function VerseCard({ verse, onClick, showRank = true }: VerseCardProps) {
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
