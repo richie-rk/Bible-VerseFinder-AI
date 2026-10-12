@@ -137,3 +137,51 @@ def test_separate_tables_isolated(tmp_path):
     assert b.get("k") == b"in-b"
     assert a.size() == 1
     assert b.size() == 1
+
+
+# ---------- Hygiene ----------
+
+def test_connections_are_closed(tmp_path):
+    """Every operation closes its connection, so nothing is left for the GC
+    to finalize with a ResourceWarning."""
+    import gc
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cache = SqliteCache(tmp_path / "c.db", "t", ttl_seconds=60, max_entries=2)
+        cache.set("a", b"1")
+        cache.get("a")
+        cache.get("missing")
+        cache.delete("a")
+        cache.size()
+        cache.clear()
+        del cache
+        gc.collect()
+    assert not [w for w in caught if issubclass(w.category, ResourceWarning)]
+
+
+def test_uses_wal_journal(tmp_path):
+    import sqlite3
+
+    SqliteCache(tmp_path / "c.db", "t")
+    conn = sqlite3.connect(tmp_path / "c.db")
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()
+
+
+def test_set_purges_expired_rows(tmp_path):
+    cache = SqliteCache(tmp_path / "c.db", "t", ttl_seconds=1)
+    cache.set("old", b"v")
+    time.sleep(1.1)
+    cache.set("new", b"v")
+    # "old" was never read again, but the write swept it out.
+    assert cache.size() == 1
+
+
+@pytest.mark.parametrize("name", ["t; DROP TABLE x", "1abc", "", "a-b"])
+def test_rejects_unsafe_table_names(tmp_path, name):
+    with pytest.raises(ValueError):
+        SqliteCache(tmp_path / "c.db", name)
