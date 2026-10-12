@@ -5,7 +5,10 @@ This script:
 1. Loads NT verses from web.csv (Book Numbers 40-66)
 2. Embeds verses in batches using text-embedding-3-small
 3. Creates a FAISS IndexFlatIP index
-4. Saves index and metadata to vector_store/
+4. Saves index and metadata to backend/vector_store/, where the API loads them
+
+If any batch still fails after retries, nothing is written: a partial index
+would silently drop verses from search.
 """
 
 import csv
@@ -38,7 +41,7 @@ RETRY_DELAY = 2  # seconds (doubles on each retry)
 # Paths
 SCRIPT_DIR = Path(__file__).parent
 DATA_PATH = SCRIPT_DIR / "data" / "web.csv"
-OUTPUT_DIR = SCRIPT_DIR / "vector_store"
+OUTPUT_DIR = SCRIPT_DIR.parent / "backend" / "vector_store"
 INDEX_PATH = OUTPUT_DIR / "bible_index.faiss"
 METADATA_PATH = OUTPUT_DIR / "verse_metadata.json"
 ERROR_LOG_PATH = OUTPUT_DIR / "embedding_errors.log"
@@ -55,7 +58,7 @@ def load_nt_verses() -> list[dict]:
     skipped = []
 
     with open(DATA_PATH, "r", encoding="utf-8") as f:
-        # Skip header lines (first 6 lines, header is on line 6)
+        # Skip the 5-line preamble; the CSV header row is line 6
         for _ in range(5):
             next(f)
 
@@ -184,16 +187,20 @@ def create_index(verses: list[dict]) -> tuple[faiss.IndexFlatIP, list[dict]]:
                 time.sleep(0.3)
 
     if failed_batches:
-        console.print(f"\n[red]WARNING: {len(failed_batches)} batches failed. Check {ERROR_LOG_PATH}[/red]")
+        console.print(f"\n[red]ERROR: {len(failed_batches)} batches failed. Check {ERROR_LOG_PATH}[/red]")
         console.print("[red]Failed verse ranges:[/red]")
         for batch_num, start, end in failed_batches:
             console.print(f"  - Batch {batch_num + 1}: verses {start}-{end}")
-
-    # Combine all embeddings
-    if not all_embeddings:
-        raise RuntimeError("No embeddings were created. Check your API key and network connection.")
+        raise RuntimeError(
+            "Some batches could not be embedded; refusing to write an index that is missing verses. "
+            "Re-run the script."
+        )
 
     embeddings_matrix = np.vstack(all_embeddings)
+    if embeddings_matrix.shape != (len(verses), EMBEDDING_DIM):
+        raise RuntimeError(
+            f"Expected {len(verses)} embeddings of {EMBEDDING_DIM} dimensions, got {embeddings_matrix.shape}"
+        )
 
     # Create FAISS index
     console.print(f"\n[bold cyan]Creating FAISS IndexFlatIP with {EMBEDDING_DIM} dimensions...[/bold cyan]")
